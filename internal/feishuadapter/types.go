@@ -102,6 +102,7 @@ type GatewayClient interface {
 	Authenticate(ctx context.Context) error
 	BindStream(ctx context.Context, sessionID string, runID string) error
 	Run(ctx context.Context, sessionID string, runID string, inputText string) error
+	CancelRun(ctx context.Context, sessionID string, runID string) (bool, error)
 	ResolvePermission(ctx context.Context, requestID string, decision string) error
 	ResolveUserQuestion(ctx context.Context, requestID string, status string, values []string, message string) error
 	Ping(ctx context.Context) error
@@ -113,6 +114,7 @@ type GatewayClient interface {
 type Messenger interface {
 	SendText(ctx context.Context, chatID string, text string) error
 	SendPermissionCard(ctx context.Context, chatID string, payload PermissionCardPayload) (string, error)
+	UpdatePendingPermissionCard(ctx context.Context, cardID string, payload PermissionCardPayload) error
 	UpdatePermissionCard(ctx context.Context, cardID string, payload ResolvedPermissionCardPayload) error
 	// DeleteMessage 删除已发送消息，用于审批完成后的卡片收起。
 	DeleteMessage(ctx context.Context, messageID string) error
@@ -181,6 +183,7 @@ type StatusCardPayload struct {
 	PendingCount    int
 	Result          string
 	Summary         string
+	ProgressLines   []string
 	AsyncRewakeHint string
 	Elapsed         string
 }

@@ -73,32 +73,14 @@ func (m *feishuMessenger) SendPermissionCard(ctx context.Context, chatID string,
 	return m.sendMessage(ctx, chatID, "interactive", string(content))
 }
 
+// UpdatePendingPermissionCard 根据 card_id 覆盖更新审批卡片为新的待审批请求。
+func (m *feishuMessenger) UpdatePendingPermissionCard(ctx context.Context, cardID string, payload PermissionCardPayload) error {
+	return m.patchInteractiveCard(ctx, cardID, buildPermissionCard(payload))
+}
+
 // UpdatePermissionCard 根据 card_id 覆盖更新审批卡片为已处理状态。
 func (m *feishuMessenger) UpdatePermissionCard(ctx context.Context, cardID string, payload ResolvedPermissionCardPayload) error {
-	token, err := m.tenantAccessToken(ctx)
-	if err != nil {
-		return err
-	}
-	card := buildResolvedPermissionCard(payload)
-	content, err := json.Marshal(card)
-	if err != nil {
-		return err
-	}
-	body := map[string]string{
-		"content": string(content),
-	}
-	data, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-	url := strings.TrimRight(m.baseURL, "/") + "/open-apis/im/v1/messages/" + cardID
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(data))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	return m.doJSONRequest(req)
+	return m.patchInteractiveCard(ctx, cardID, buildResolvedPermissionCard(payload))
 }
 
 // DeleteMessage 根据 message_id 删除飞书消息，常用于审批卡片在完成后收起。
@@ -169,29 +151,7 @@ func (m *feishuMessenger) SendStatusCard(ctx context.Context, chatID string, pay
 
 // UpdateCard 根据 card_id 覆盖更新当前 run 的状态卡片内容。
 func (m *feishuMessenger) UpdateCard(ctx context.Context, cardID string, payload StatusCardPayload) error {
-	token, err := m.tenantAccessToken(ctx)
-	if err != nil {
-		return err
-	}
-	content, err := json.Marshal(buildStatusCard(payload))
-	if err != nil {
-		return err
-	}
-	body := map[string]string{
-		"content": string(content),
-	}
-	data, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-	url := strings.TrimRight(m.baseURL, "/") + "/open-apis/im/v1/messages/" + cardID
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(data))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	return m.doJSONRequest(req)
+	return m.patchInteractiveCard(ctx, cardID, buildStatusCard(payload))
 }
 
 // sendMessage 统一封装飞书消息发送请求，复用鉴权与错误处理。
@@ -247,6 +207,33 @@ func (m *feishuMessenger) doJSONRequestWithMessageID(req *http.Request) (string,
 func (m *feishuMessenger) doJSONRequest(req *http.Request) error {
 	_, err := m.doJSONRequestWithMessageID(req)
 	return err
+}
+
+// patchInteractiveCard 复用飞书消息 PATCH 接口更新交互卡片内容。
+func (m *feishuMessenger) patchInteractiveCard(ctx context.Context, cardID string, card map[string]any) error {
+	token, err := m.tenantAccessToken(ctx)
+	if err != nil {
+		return err
+	}
+	content, err := json.Marshal(card)
+	if err != nil {
+		return err
+	}
+	body := map[string]string{
+		"content": string(content),
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	url := strings.TrimRight(m.baseURL, "/") + "/open-apis/im/v1/messages/" + cardID
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	return m.doJSONRequest(req)
 }
 
 // tenantAccessToken 获取并缓存 tenant access token，避免每次发送都重复换取。
@@ -336,6 +323,23 @@ func buildStatusCard(payload StatusCardPayload) map[string]any {
 		})
 	}
 
+	if len(payload.ProgressLines) > 0 {
+		lines := make([]string, 0, len(payload.ProgressLines))
+		for _, line := range payload.ProgressLines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+			lines = append(lines, "- "+trimmed)
+		}
+		if len(lines) > 0 {
+			elements = append(elements, map[string]any{
+				"tag":  "div",
+				"text": map[string]any{"tag": "lark_md", "content": "---\n**过程**\n" + strings.Join(lines, "\n")},
+			})
+		}
+	}
+
 	if summary := strings.TrimSpace(payload.Summary); summary != "" {
 		elements = append(elements, map[string]any{
 			"tag":  "div",
@@ -413,15 +417,27 @@ func buildApprovalRecordsElement(records []ApprovalRecord, pendingCount int) map
 	approvedCount := 0
 	rejectedCount := 0
 	for _, r := range records {
-		switch r.Decision {
-		case "allow_once":
+		switch {
+		case isApprovalApprovedDecision(r.Decision):
 			approvedCount++
-		case "reject":
+		case isApprovalRejectedDecision(r.Decision):
 			rejectedCount++
 		}
 	}
+	totalCount := len(records)
+	processedCount := approvedCount + rejectedCount
 
-	summaryParts := make([]string, 0, 3)
+	summaryParts := make([]string, 0, 4)
+	if totalCount > 0 {
+		switch {
+		case pendingCount == 0 && rejectedCount == totalCount:
+			summaryParts = append(summaryParts, fmt.Sprintf("%d/%d 已拒绝", rejectedCount, totalCount))
+		case pendingCount == 0 && approvedCount == totalCount:
+			summaryParts = append(summaryParts, fmt.Sprintf("%d/%d 已通过", approvedCount, totalCount))
+		default:
+			summaryParts = append(summaryParts, fmt.Sprintf("%d/%d 已审批", processedCount, totalCount))
+		}
+	}
 	if approvedCount > 0 {
 		summaryParts = append(summaryParts, fmt.Sprintf("%d 通过", approvedCount))
 	}
@@ -435,9 +451,10 @@ func buildApprovalRecordsElement(records []ApprovalRecord, pendingCount int) map
 
 	detailLines := make([]string, 0, len(records))
 	for _, r := range records {
-		icon, _ := statusIconAndColor(r.Decision)
+		normalizedDecision := normalizeApprovalDecision(r.Decision)
+		icon, _ := statusIconAndColor(normalizedDecision)
 		label := fallbackStatusField(r.ToolName, "unknown_tool")
-		detailLines = append(detailLines, fmt.Sprintf("%s %s → *%s*", icon, label, r.Decision))
+		detailLines = append(detailLines, fmt.Sprintf("%s %s → *%s*", icon, label, normalizedDecision))
 	}
 	fullText := fmt.Sprintf("**%s**\n%s", summaryText, strings.Join(detailLines, "\n"))
 
@@ -459,12 +476,18 @@ func statusIconAndColor(status string) (string, string) {
 		return "⏳", "yellow"
 	case "approved":
 		return "✅", "green"
+	case "allow_once", "allow_session", "allow":
+		return "✅", "green"
 	case "rejected":
+		return "❌", "red"
+	case "reject", "deny", "denied":
 		return "❌", "red"
 	case "success":
 		return "🎉", "green"
 	case "failure":
 		return "💥", "red"
+	case "interrupted":
+		return "⏹️", "orange"
 	default:
 		return "🔵", "blue"
 	}
@@ -524,7 +547,10 @@ func buildPermissionCard(payload PermissionCardPayload) map[string]any {
 	}
 
 	return map[string]any{
-		"config": map[string]any{"wide_screen_mode": true},
+		"config": map[string]any{
+			"wide_screen_mode": true,
+			"update_multi":     true,
+		},
 		"header": map[string]any{
 			"title":    map[string]string{"tag": "plain_text", "content": "工具审批"},
 			"template": "yellow",
@@ -566,7 +592,10 @@ func buildResolvedPermissionCard(payload ResolvedPermissionCardPayload) map[stri
 	body += "\n\n" + resultIcon + " **" + resultText + "**"
 
 	return map[string]any{
-		"config": map[string]any{"wide_screen_mode": true},
+		"config": map[string]any{
+			"wide_screen_mode": true,
+			"update_multi":     true,
+		},
 		"header": map[string]any{
 			"title":    map[string]string{"tag": "plain_text", "content": "工具审批"},
 			"template": headerColor,
@@ -649,7 +678,10 @@ func buildUserQuestionCard(payload UserQuestionCardPayload) map[string]any {
 	}
 
 	return map[string]any{
-		"config": map[string]any{"wide_screen_mode": true},
+		"config": map[string]any{
+			"wide_screen_mode": true,
+			"update_multi":     true,
+		},
 		"header": map[string]any{
 			"title":    map[string]string{"tag": "plain_text", "content": title},
 			"template": "wathet",
@@ -685,7 +717,10 @@ func buildResolvedUserQuestionCard(payload ResolvedUserQuestionCardPayload) map[
 	}
 
 	return map[string]any{
-		"config": map[string]any{"wide_screen_mode": true},
+		"config": map[string]any{
+			"wide_screen_mode": true,
+			"update_multi":     true,
+		},
 		"header": map[string]any{
 			"title":    map[string]string{"tag": "plain_text", "content": title},
 			"template": headerColor,

@@ -133,6 +133,14 @@ func TestSendPermissionCardUsesInteractiveMessage(t *testing.T) {
 	if !strings.Contains(content, "allow_once") || !strings.Contains(content, "perm-1") {
 		t.Fatalf("content = %q, want permission buttons", content)
 	}
+	var contentPayload map[string]any
+	if err := json.Unmarshal([]byte(content), &contentPayload); err != nil {
+		t.Fatalf("decode card content: %v", err)
+	}
+	config, _ := contentPayload["config"].(map[string]any)
+	if config == nil || config["update_multi"] != true {
+		t.Fatalf("card config.update_multi = %#v, want true", config)
+	}
 }
 
 func TestSendMessageReturnsInvalidJSONOnHTTPFailure(t *testing.T) {
@@ -470,11 +478,22 @@ func TestUpdatePermissionCardAndResolvedCardHelpers(t *testing.T) {
 	}, 2)
 	rawSummary, _ := json.Marshal(approvalSummary)
 	summaryText := string(rawSummary)
-	if !strings.Contains(summaryText, "1 通过") || !strings.Contains(summaryText, "1 拒绝") || !strings.Contains(summaryText, "2 等待") {
+	if !strings.Contains(summaryText, "2/2 已审批") ||
+		!strings.Contains(summaryText, "1 通过") ||
+		!strings.Contains(summaryText, "1 拒绝") ||
+		!strings.Contains(summaryText, "2 等待") {
 		t.Fatalf("approval summary = %s, want approval counts", summaryText)
 	}
 	if !strings.Contains(summaryText, "bash") || !strings.Contains(summaryText, "git") {
 		t.Fatalf("approval summary = %s, want tool details", summaryText)
+	}
+
+	rejectedOnlySummary := buildApprovalRecordsElement([]ApprovalRecord{
+		{ToolName: "filesystem_write_file", Decision: "reject"},
+	}, 0)
+	rejectedRaw, _ := json.Marshal(rejectedOnlySummary)
+	if !strings.Contains(string(rejectedRaw), "1/1 已拒绝") {
+		t.Fatalf("approval summary = %s, want rejected headline", string(rejectedRaw))
 	}
 
 	timeout := buildResolvedUserQuestionCard(ResolvedUserQuestionCardPayload{

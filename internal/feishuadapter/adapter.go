@@ -19,11 +19,15 @@ import (
 const defaultSignatureMaxSkew = 5 * time.Minute
 const defaultProgressNotifyInterval = 2 * time.Second
 const defaultCardRefreshInterval = 1500 * time.Millisecond
+const defaultRunStallTimeout = 3 * time.Minute
 const defaultPermissionCardDismissDelay = 2 * time.Second
+const defaultProgressTrailLimit = 8
 
 type approvalEntry struct {
 	RequestID string
 	ToolName  string
+	Operation string
+	Target    string
 	Reason    string
 	Decision  string // "pending", "allow_once", "reject"
 }
@@ -50,8 +54,10 @@ type sessionBinding struct {
 	ApprovalRecords []approvalEntry
 	Result          string
 	LastSummary     string
+	ProgressTrail   []string
 	AsyncRewakeHint string
 	RunStartTime    time.Time
+	LastEventTime   time.Time
 }
 
 // Adapter 负责桥接飞书回调与 Gateway JSON-RPC 长连接。
@@ -64,12 +70,18 @@ type Adapter struct {
 
 	nowFn func() time.Time
 
-	mu              sync.RWMutex
-	activeRuns      map[string]sessionBinding
-	sessionChats    map[string]string
-	requestRuns     map[string]string
-	lastProgressAt  map[string]time.Time
-	permissionCards map[string]string // requestID -> card message_id
+	mu                 sync.RWMutex
+	activeRuns         map[string]sessionBinding
+	sessionChats       map[string]string
+	requestRuns        map[string]string
+	lastProgressAt     map[string]time.Time
+	permissionCards    map[string]string // requestID -> card message_id
+	runPermissionCards map[string]string // runKey -> card message_id
+	// runPermissionCardHistory 记录一个 run 曾经创建/复用过的所有审批卡，用于终态时统一收敛，避免旧卡残留。
+	runPermissionCardHistory map[string]map[string]struct{} // runKey -> set(card message_id)
+	permissionCardRuns map[string]string // card message_id -> runKey
+	// runPermissionActiveRequest 记录当前审批卡正在展示的 request_id，用于避免旧审批回写覆盖新审批。
+	runPermissionActiveRequest map[string]string // runKey -> requestID
 	// resolvedPermissions 记录已完成审批的 request_id，避免重复事件将状态回滚为 pending。
 	resolvedPermissions map[string]string // requestID -> decision
 	userQuestionCards   map[string]string // requestID -> card message_id
@@ -104,6 +116,10 @@ func New(cfg Config, gateway GatewayClient, messenger Messenger, logger *log.Log
 		requestRuns:                make(map[string]string),
 		lastProgressAt:             make(map[string]time.Time),
 		permissionCards:            make(map[string]string),
+		runPermissionCards:         make(map[string]string),
+		runPermissionCardHistory:   make(map[string]map[string]struct{}),
+		permissionCardRuns:         make(map[string]string),
+		runPermissionActiveRequest: make(map[string]string),
 		resolvedPermissions:        make(map[string]string),
 		userQuestionCards:          make(map[string]string),
 		pendingQuestions:           make(map[string]userQuestionEntry),
@@ -167,14 +183,21 @@ func (a *Adapter) HandleMessage(ctx context.Context, event FeishuMessageEvent) e
 	if chatType == "" {
 		chatType = "p2p"
 	}
-	if chatType == "group" && !isMentionCurrentBot(event, a.cfg) {
-		return nil
-	}
+	a.safeLog(
+		"feishu message received event_id=%s message_id=%s chat_id=%s chat_type=%s mentions=%d",
+		strings.TrimSpace(event.EventID),
+		strings.TrimSpace(event.MessageID),
+		strings.TrimSpace(event.ChatID),
+		chatType,
+		len(event.Mentions),
+	)
 	if strings.TrimSpace(event.MessageID) == "" || strings.TrimSpace(event.ChatID) == "" {
+		a.safeLog("feishu message rejected: missing message_id or chat_id")
 		return fmt.Errorf("missing message_id or chat_id")
 	}
 	dedupeKey := "msg:" + strings.TrimSpace(event.EventID) + ":" + strings.TrimSpace(event.MessageID)
 	if !a.idem.TryStart(dedupeKey, a.nowFn()) {
+		a.safeLog("feishu message skipped by idempotency dedupe_key=%s", dedupeKey)
 		return nil
 	}
 	succeeded := false
@@ -188,9 +211,11 @@ func (a *Adapter) HandleMessage(ctx context.Context, event FeishuMessageEvent) e
 
 	text := strings.TrimSpace(event.ContentText)
 	if text == "" {
+		a.safeLog("feishu message ignored: empty text content message_id=%s", strings.TrimSpace(event.MessageID))
 		return nil
 	}
 	if handled, err := a.tryHandleTextAction(ctx, event.ChatID, text); handled {
+		a.safeLog("feishu text action handled chat_id=%s err=%v", strings.TrimSpace(event.ChatID), err)
 		if err == nil {
 			succeeded = true
 		}
@@ -199,11 +224,14 @@ func (a *Adapter) HandleMessage(ctx context.Context, event FeishuMessageEvent) e
 
 	sessionID := BuildSessionID(event.ChatID)
 	runID := BuildRunID(event.MessageID)
+	a.safeLog("feishu message dispatching run session_id=%s run_id=%s chat_id=%s", sessionID, runID, strings.TrimSpace(event.ChatID))
 	if err := a.bindThenRun(ctx, sessionID, runID, event.ChatID, text); err != nil {
 		a.safeLog("handle message failed: %v", err)
 		_ = a.messenger.SendText(context.Background(), event.ChatID, "任务受理失败，请稍后重试。")
 		return err
 	}
+	a.interruptSessionRuns(ctx, sessionID, runID)
+	a.safeLog("feishu message accepted session_id=%s run_id=%s", sessionID, runID)
 	succeeded = true
 	return nil
 }
@@ -240,15 +268,16 @@ func (a *Adapter) HandleCardAction(ctx context.Context, event FeishuCardActionEv
 	defer cancel()
 	switch actionType {
 	case "permission":
-		decision := strings.TrimSpace(strings.ToLower(event.Decision))
-		if decision != "allow_once" && decision != "reject" {
+		decision := normalizeApprovalDecision(event.Decision)
+		if !isApprovalApprovedDecision(decision) && !isApprovalRejectedDecision(decision) {
 			return nil
 		}
-		if err := a.gateway.ResolvePermission(callCtx, requestID, decision); err != nil {
+		resolvedRequestID, err := a.resolvePermissionWithFallback(callCtx, requestID, strings.TrimSpace(event.CardID), decision)
+		if err != nil {
 			a.safeLog("resolve permission failed: %v", err)
 			return err
 		}
-		a.updateApprovalStatus(requestID, decision)
+		a.updateApprovalStatus(resolvedRequestID, decision)
 	case "user_question":
 		status := strings.TrimSpace(strings.ToLower(event.Status))
 		if status == "" {
@@ -271,22 +300,189 @@ func (a *Adapter) HandleCardAction(ctx context.Context, event FeishuCardActionEv
 	return nil
 }
 
+// resolvePermissionWithFallback 优先按卡片回调 request_id 提交审批；若请求已过期则回退到当前待审批请求。
+func (a *Adapter) resolvePermissionWithFallback(
+	ctx context.Context,
+	requestID string,
+	cardID string,
+	decision string,
+) (string, error) {
+	normalizedRequestID := strings.TrimSpace(requestID)
+	if normalizedRequestID == "" {
+		return "", nil
+	}
+	normalizedDecision := normalizeApprovalDecision(decision)
+	if a.isResolvedPermissionDecision(normalizedRequestID, normalizedDecision) {
+		a.safeLog(
+			"permission action ignored for already resolved request request_id=%s decision=%s",
+			normalizedRequestID,
+			normalizedDecision,
+		)
+		return normalizedRequestID, nil
+	}
+
+	primaryErr := a.gateway.ResolvePermission(ctx, normalizedRequestID, decision)
+	if primaryErr == nil {
+		return normalizedRequestID, nil
+	}
+	if a.isResolvedPermissionDecision(normalizedRequestID, normalizedDecision) {
+		a.safeLog(
+			"permission request already resolved after primary error request_id=%s decision=%s err=%v",
+			normalizedRequestID,
+			normalizedDecision,
+			primaryErr,
+		)
+		return normalizedRequestID, nil
+	}
+	if !isPermissionRequestNotFoundError(primaryErr) {
+		return "", primaryErr
+	}
+
+	fallbackRequestID := a.lookupPendingPermissionRequestByCard(normalizedRequestID, strings.TrimSpace(cardID))
+	if fallbackRequestID == "" || fallbackRequestID == normalizedRequestID {
+		a.safeLog("permission request expired request_id=%s card_id=%s", normalizedRequestID, strings.TrimSpace(cardID))
+		return normalizedRequestID, nil
+	}
+
+	fallbackErr := a.gateway.ResolvePermission(ctx, fallbackRequestID, decision)
+	if fallbackErr != nil {
+		if isPermissionRequestNotFoundError(primaryErr) && isPermissionRequestNotFoundError(fallbackErr) {
+			a.safeLog(
+				"permission fallback request expired request_id=%s fallback_request_id=%s card_id=%s",
+				normalizedRequestID,
+				fallbackRequestID,
+				strings.TrimSpace(cardID),
+			)
+			return fallbackRequestID, nil
+		}
+		return "", fallbackErr
+	}
+	a.safeLog(
+		"permission request remapped request_id=%s resolved_request_id=%s card_id=%s primary_err=%v",
+		normalizedRequestID,
+		fallbackRequestID,
+		strings.TrimSpace(cardID),
+		primaryErr,
+	)
+	return fallbackRequestID, nil
+}
+
+// isResolvedPermissionDecision 判断 request 是否已按同一决议完成，避免旧卡回调误触发 fallback 审批下一条请求。
+func (a *Adapter) isResolvedPermissionDecision(requestID string, decision string) bool {
+	normalizedRequestID := strings.TrimSpace(requestID)
+	if normalizedRequestID == "" {
+		return false
+	}
+	a.mu.RLock()
+	resolvedDecision, ok := a.resolvedPermissions[normalizedRequestID]
+	a.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	return normalizeApprovalDecision(resolvedDecision) == normalizeApprovalDecision(decision)
+}
+
+// lookupPendingPermissionRequestByCard 从当前运行状态中定位仍待处理的审批 request_id。
+func (a *Adapter) lookupPendingPermissionRequestByCard(requestID string, cardID string) string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	runKey := strings.TrimSpace(a.requestRuns[strings.TrimSpace(requestID)])
+	if runKey == "" && strings.TrimSpace(cardID) != "" {
+		runKey = strings.TrimSpace(a.permissionCardRuns[strings.TrimSpace(cardID)])
+	}
+	if runKey == "" {
+		return ""
+	}
+	binding, ok := a.activeRuns[runKey]
+	if !ok {
+		return ""
+	}
+	activeRequestID := strings.TrimSpace(a.runPermissionActiveRequest[runKey])
+	if activeRequestID != "" {
+		for _, entry := range binding.ApprovalRecords {
+			if strings.TrimSpace(entry.RequestID) != activeRequestID {
+				continue
+			}
+			if !isApprovalPendingDecision(entry.Decision) {
+				break
+			}
+			return activeRequestID
+		}
+	}
+	for _, entry := range binding.ApprovalRecords {
+		candidate := strings.TrimSpace(entry.RequestID)
+		if candidate == "" {
+			continue
+		}
+		if !isApprovalPendingDecision(entry.Decision) {
+			continue
+		}
+		return candidate
+	}
+	return ""
+}
+
+// rememberRunPermissionCardLocked 记录 run 关联过的审批卡，用于后续统一收敛旧卡。
+// 调用方必须持有 a.mu 写锁。
+func (a *Adapter) rememberRunPermissionCardLocked(runKey string, cardID string) {
+	normalizedRunKey := strings.TrimSpace(runKey)
+	normalizedCardID := strings.TrimSpace(cardID)
+	if normalizedRunKey == "" || normalizedCardID == "" {
+		return
+	}
+	history := a.runPermissionCardHistory[normalizedRunKey]
+	if history == nil {
+		history = make(map[string]struct{})
+		a.runPermissionCardHistory[normalizedRunKey] = history
+	}
+	history[normalizedCardID] = struct{}{}
+}
+
+// runPermissionCardIDsLocked 返回 run 关联过的全部审批卡，便于终态统一收敛旧卡。
+// 调用方必须持有 a.mu 读锁或写锁。
+func (a *Adapter) runPermissionCardIDsLocked(runKey string) []string {
+	normalizedRunKey := strings.TrimSpace(runKey)
+	if normalizedRunKey == "" {
+		return nil
+	}
+	history := a.runPermissionCardHistory[normalizedRunKey]
+	if len(history) == 0 {
+		return nil
+	}
+	cardIDs := make([]string, 0, len(history))
+	for cardID := range history {
+		normalizedCardID := strings.TrimSpace(cardID)
+		if normalizedCardID == "" {
+			continue
+		}
+		cardIDs = append(cardIDs, normalizedCardID)
+	}
+	return cardIDs
+}
+
 // bindThenRun 按 authenticate -> bindStream -> run 的顺序提交一次请求并记录会话绑定。
 func (a *Adapter) bindThenRun(ctx context.Context, sessionID string, runID string, chatID string, text string) error {
 	callCtx, cancel := context.WithTimeout(ctx, a.cfg.RequestTimeout)
 	defer cancel()
+	a.safeLog("bindThenRun authenticate start session_id=%s run_id=%s", sessionID, runID)
 	if err := a.gateway.Authenticate(callCtx); err != nil {
+		a.safeLog("bindThenRun authenticate failed session_id=%s run_id=%s err=%v", sessionID, runID, err)
 		return err
 	}
+	a.safeLog("bindThenRun bind stream start session_id=%s run_id=%s", sessionID, runID)
 	if err := a.gateway.BindStream(callCtx, sessionID, runID); err != nil {
+		a.safeLog("bindThenRun bind stream failed session_id=%s run_id=%s err=%v", sessionID, runID, err)
 		return err
 	}
 	a.trackSession(sessionID, runID, chatID, text)
+	a.safeLog("bindThenRun gateway run start session_id=%s run_id=%s", sessionID, runID)
 	if err := a.gateway.Run(callCtx, sessionID, runID, text); err != nil {
 		// run 受理失败时及时回收活跃绑定，避免重连阶段反复重绑无效 run。
 		a.untrackRun(sessionID, runID)
+		a.safeLog("bindThenRun gateway run failed session_id=%s run_id=%s err=%v", sessionID, runID, err)
 		return err
 	}
+	a.safeLog("bindThenRun gateway run accepted session_id=%s run_id=%s", sessionID, runID)
 	if err := a.ensureRunCard(context.Background(), sessionID, runID); err != nil {
 		a.safeLog("send status card failed: %v", err)
 		_ = a.messenger.SendText(context.Background(), chatID, "任务已受理，正在执行。")
@@ -294,8 +490,84 @@ func (a *Adapter) bindThenRun(ctx context.Context, sessionID string, runID strin
 	return nil
 }
 
+// interruptSessionRuns 在同会话收到新消息时取消旧 run，避免排队阻塞新请求。
+func (a *Adapter) interruptSessionRuns(ctx context.Context, sessionID string, incomingRunID string) {
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	if normalizedSessionID == "" {
+		return
+	}
+	type candidate struct {
+		sessionID string
+		runID     string
+	}
+	candidates := make([]candidate, 0)
+	a.mu.RLock()
+	for _, binding := range a.activeRuns {
+		if strings.TrimSpace(binding.SessionID) != normalizedSessionID {
+			continue
+		}
+		if strings.TrimSpace(binding.RunID) == strings.TrimSpace(incomingRunID) {
+			continue
+		}
+		if strings.TrimSpace(strings.ToLower(binding.Result)) != "pending" {
+			continue
+		}
+		candidates = append(candidates, candidate{
+			sessionID: strings.TrimSpace(binding.SessionID),
+			runID:     strings.TrimSpace(binding.RunID),
+		})
+	}
+	a.mu.RUnlock()
+	if len(candidates) == 0 {
+		return
+	}
+
+	for _, item := range candidates {
+		callCtx, cancel := context.WithTimeout(ctx, a.cfg.RequestTimeout)
+		canceled, err := a.gateway.CancelRun(callCtx, item.sessionID, item.runID)
+		cancel()
+		if err != nil {
+			a.safeLog("interrupt previous run failed session_id=%s run_id=%s err=%v", item.sessionID, item.runID, err)
+			continue
+		}
+		if !canceled {
+			a.safeLog("interrupt previous run skipped session_id=%s run_id=%s canceled=false", item.sessionID, item.runID)
+			continue
+		}
+		a.markRunInterrupted(item.sessionID, item.runID, "收到新消息，已中断上一条任务")
+		a.untrackRun(item.sessionID, item.runID)
+	}
+}
+
+// markRunInterrupted 将 run 标记为 interrupted，并刷新状态卡提示用户已被新请求抢占。
+func (a *Adapter) markRunInterrupted(sessionID string, runID string, summary string) {
+	key := runBindingKey(sessionID, runID)
+	a.mu.Lock()
+	binding, ok := a.activeRuns[key]
+	if !ok {
+		a.mu.Unlock()
+		return
+	}
+	binding.Status = "interrupted"
+	binding.Result = "interrupted"
+	if strings.TrimSpace(summary) != "" {
+		binding.LastSummary = strings.TrimSpace(summary)
+	}
+	cardID := strings.TrimSpace(binding.CardID)
+	payload := binding.statusCardPayload()
+	a.activeRuns[key] = binding
+	a.mu.Unlock()
+	if cardID == "" {
+		return
+	}
+	if err := a.messenger.UpdateCard(context.Background(), cardID, payload); err != nil {
+		a.safeLog("update interrupted status card failed: %v", err)
+	}
+}
+
 // trackSession 记录 session 到飞书 chat 的映射，用于事件回推。
 func (a *Adapter) trackSession(sessionID string, runID string, chatID string, taskName string) {
+	now := a.nowFn()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	key := runBindingKey(sessionID, runID)
@@ -307,7 +579,8 @@ func (a *Adapter) trackSession(sessionID string, runID string, chatID string, ta
 		Status:         "thinking",
 		ApprovalStatus: "none",
 		Result:         "pending",
-		RunStartTime:   a.nowFn(),
+		RunStartTime:   now,
+		LastEventTime:  now,
 	}
 	if sessionID != "" && chatID != "" {
 		a.sessionChats[sessionID] = chatID
@@ -325,12 +598,21 @@ func (a *Adapter) untrackRun(sessionID string, runID string) {
 	if binding, ok := a.activeRuns[key]; ok {
 		for requestID, requestRunKey := range a.requestRuns {
 			if requestRunKey == key {
+				if cardID := strings.TrimSpace(a.permissionCards[requestID]); cardID != "" {
+					delete(a.permissionCardRuns, cardID)
+				}
 				delete(a.requestRuns, requestID)
 				delete(a.permissionCards, requestID)
 				delete(a.userQuestionCards, requestID)
 				delete(a.pendingQuestions, requestID)
 			}
 		}
+		if cardID := strings.TrimSpace(a.runPermissionCards[key]); cardID != "" {
+			delete(a.permissionCardRuns, cardID)
+		}
+		delete(a.runPermissionCards, key)
+		delete(a.runPermissionCardHistory, key)
+		delete(a.runPermissionActiveRequest, key)
 		delete(a.lastProgressAt, key)
 		_ = binding
 	}
@@ -375,32 +657,42 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 		a.safeLog("decode gateway event failed: %v", err)
 		return
 	}
+	a.safeLog("gateway event received type=%s session_id=%s run_id=%s", eventType, sessionID, runID)
 	chatID := a.lookupChatID(sessionID, runID)
 	if chatID == "" {
+		a.safeLog("gateway event ignored: no chat binding type=%s session_id=%s run_id=%s", eventType, sessionID, runID)
 		return
 	}
 	switch strings.ToLower(strings.TrimSpace(eventType)) {
 	case "run_progress":
+		a.touchRunEvent(sessionID, runID)
 		if envelope != nil {
 			if runtimeType := readString(envelope, "runtime_event_type"); runtimeType != "" {
 				if strings.EqualFold(runtimeType, "permission_requested") {
 					requestID, toolName, operation, target, reason := extractPermissionRequest(envelope)
 					if requestID != "" {
-						if a.markPermissionPending(sessionID, runID, requestID, toolName, reason) {
-							cardID, err := a.messenger.SendPermissionCard(ctx, chatID, PermissionCardPayload{
-								RequestID: requestID,
-								ToolName:  toolName,
-								Operation: operation,
-								Target:    target,
-								Message:   reason,
-							})
-							if err == nil && strings.TrimSpace(cardID) != "" {
-								a.mu.Lock()
-								a.permissionCards[requestID] = cardID
-								a.mu.Unlock()
-							}
+						if a.markPermissionPending(sessionID, runID, requestID, toolName, operation, target, reason) {
+							a.upsertPermissionCard(
+								ctx,
+								sessionID,
+								runID,
+								chatID,
+								PermissionCardPayload{
+									RequestID: requestID,
+									ToolName:  toolName,
+									Operation: operation,
+									Target:    target,
+									Message:   reason,
+								},
+							)
 						}
 						return
+					}
+				} else if strings.EqualFold(runtimeType, "permission_resolved") {
+					requestID, resolvedDecision := extractPermissionResolved(envelope)
+					if requestID != "" && resolvedDecision != "" {
+						a.safeLog("permission resolved event request_id=%s decision=%s", requestID, resolvedDecision)
+						a.updateApprovalStatus(requestID, resolvedDecision)
 					}
 				} else if strings.EqualFold(runtimeType, "user_question_requested") {
 					question := extractUserQuestionRequest(envelope)
@@ -443,9 +735,11 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 		// 除审批请求外，内部 runtime_event_type 不直接透出到飞书用户视图，避免暴露控制面细节。
 		return
 	case "run_done":
+		a.touchRunEvent(sessionID, runID)
 		a.markRunTerminal(sessionID, runID, "success", extractSummaryText(envelope), "")
 		a.untrackRun(sessionID, runID)
 	case "run_error":
+		a.touchRunEvent(sessionID, runID)
 		a.markRunTerminal(sessionID, runID, "failure", "", extractUserVisibleErrorText(envelope))
 		a.untrackRun(sessionID, runID)
 	}
@@ -530,15 +824,30 @@ func (a *Adapter) refreshActiveCardsLoop(ctx context.Context) {
 }
 
 // refreshActiveCards 对当前所有活跃 run 更新卡片，仅刷新耗时字段变化。
+// 说明：超过静默阈值仅做告警，不在适配器侧强行终止 run，避免误伤长耗时但无中间事件的合法执行。
 func (a *Adapter) refreshActiveCards(ctx context.Context) {
+	now := a.nowFn()
+	staleRuns := make([]sessionBinding, 0)
+	snapshot := make([]sessionBinding, 0)
 	a.mu.RLock()
-	snapshot := make([]sessionBinding, 0, len(a.activeRuns))
 	for _, binding := range a.activeRuns {
+		if shouldMarkRunStalled(binding, now) {
+			staleRuns = append(staleRuns, binding)
+		}
 		if strings.TrimSpace(binding.CardID) != "" {
 			snapshot = append(snapshot, binding)
 		}
 	}
 	a.mu.RUnlock()
+
+	for _, stale := range staleRuns {
+		a.safeLog(
+			"run stalled: no force-fail, waiting for terminal event session_id=%s run_id=%s idle_for=%s",
+			stale.SessionID,
+			stale.RunID,
+			now.Sub(stale.LastEventTime).String(),
+		)
+	}
 
 	for _, binding := range snapshot {
 		callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -549,24 +858,43 @@ func (a *Adapter) refreshActiveCards(ctx context.Context) {
 	}
 }
 
+// touchRunEvent 记录 run 的最近事件时间，用于识别"长时间无事件"的僵尸运行态。
+func (a *Adapter) touchRunEvent(sessionID string, runID string) {
+	key := runBindingKey(sessionID, runID)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	binding, ok := a.activeRuns[key]
+	if !ok {
+		return
+	}
+	binding.LastEventTime = a.nowFn()
+	a.activeRuns[key] = binding
+}
+
 // ensureRunCard 为新受理的 run 发送单独状态卡片，集中展示执行状态与审批结果。
 func (a *Adapter) ensureRunCard(ctx context.Context, sessionID string, runID string) error {
 	a.mu.RLock()
 	binding, ok := a.activeRuns[runBindingKey(sessionID, runID)]
 	a.mu.RUnlock()
 	if !ok || strings.TrimSpace(binding.ChatID) == "" {
+		a.safeLog("ensureRunCard skipped: no binding or empty chat session_id=%s run_id=%s", sessionID, runID)
 		return nil
 	}
 	if strings.TrimSpace(binding.CardID) != "" {
+		a.safeLog("ensureRunCard updating existing card session_id=%s run_id=%s card_id=%s", sessionID, runID, strings.TrimSpace(binding.CardID))
 		return a.messenger.UpdateCard(ctx, binding.CardID, binding.statusCardPayload())
 	}
+	a.safeLog("ensureRunCard creating status card session_id=%s run_id=%s chat_id=%s", sessionID, runID, strings.TrimSpace(binding.ChatID))
 	cardID, err := a.messenger.SendStatusCard(ctx, binding.ChatID, binding.statusCardPayload())
 	if err != nil {
+		a.safeLog("ensureRunCard create failed session_id=%s run_id=%s err=%v", sessionID, runID, err)
 		return err
 	}
 	if strings.TrimSpace(cardID) == "" {
-		return nil
+		a.safeLog("ensureRunCard create returned empty card_id session_id=%s run_id=%s", sessionID, runID)
+		return fmt.Errorf("create status card returned empty card id")
 	}
+	a.safeLog("ensureRunCard created status card session_id=%s run_id=%s card_id=%s", sessionID, runID, strings.TrimSpace(cardID))
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	current := a.activeRuns[runBindingKey(sessionID, runID)]
@@ -586,17 +914,24 @@ func (a *Adapter) handleRunProgressCard(ctx context.Context, sessionID string, r
 	}
 	updated := binding
 	updated.Status = deriveRunStatus(runtimeType, envelope, binding.Status)
+	if line := extractProgressLine(runtimeType, envelope); line != "" {
+		updated.ProgressTrail = appendProgressTrail(binding.ProgressTrail, line, defaultProgressTrailLimit)
+	}
 	if strings.EqualFold(runtimeType, "hook_notification") {
 		updated.LastSummary = extractHookNotificationSummary(envelope)
 		updated.AsyncRewakeHint = extractHookNotificationHint(envelope)
 	}
 	changed := updated.Status != binding.Status ||
+		!equalStringSlices(updated.ProgressTrail, binding.ProgressTrail) ||
 		updated.LastSummary != binding.LastSummary ||
 		updated.AsyncRewakeHint != binding.AsyncRewakeHint
 	cardID := strings.TrimSpace(binding.CardID)
 	a.activeRuns[key] = updated
 	a.mu.Unlock()
 	if !changed || cardID == "" {
+		if changed && cardID == "" {
+			a.safeLog("handleRunProgressCard skipped update: empty card_id session_id=%s run_id=%s runtime_type=%s", sessionID, runID, runtimeType)
+		}
 		return
 	}
 	if err := a.messenger.UpdateCard(ctx, cardID, updated.statusCardPayload()); err != nil {
@@ -604,8 +939,17 @@ func (a *Adapter) handleRunProgressCard(ctx context.Context, sessionID string, r
 	}
 }
 
-// markPermissionPending 将权限请求映射到 run 卡片，返回是否需要发送审批按钮卡片。
-func (a *Adapter) markPermissionPending(sessionID string, runID string, requestID string, toolName string, reason string) bool {
+// markPermissionPending 将权限请求映射到 run 卡片，并决定是否需要刷新审批交互卡片。
+// 同一 run 只允许一个"当前审批"占用审批卡，其余请求先留在状态卡队列中，待当前审批处理后再切换。
+func (a *Adapter) markPermissionPending(
+	sessionID string,
+	runID string,
+	requestID string,
+	toolName string,
+	operation string,
+	target string,
+	reason string,
+) bool {
 	normalizedRequestID := strings.TrimSpace(requestID)
 	if normalizedRequestID == "" {
 		return false
@@ -622,7 +966,7 @@ func (a *Adapter) markPermissionPending(sessionID string, runID string, requestI
 		return false
 	}
 
-	shouldSendCard := strings.TrimSpace(a.permissionCards[normalizedRequestID]) == ""
+	alreadyPending := false
 	binding.ApprovalStatus = "pending"
 	found := false
 	for i := range binding.ApprovalRecords {
@@ -630,8 +974,15 @@ func (a *Adapter) markPermissionPending(sessionID string, runID string, requestI
 			continue
 		}
 		found = true
+		alreadyPending = isApprovalPendingDecision(binding.ApprovalRecords[i].Decision)
 		if strings.TrimSpace(binding.ApprovalRecords[i].ToolName) == "" && strings.TrimSpace(toolName) != "" {
 			binding.ApprovalRecords[i].ToolName = strings.TrimSpace(toolName)
+		}
+		if strings.TrimSpace(binding.ApprovalRecords[i].Operation) == "" && strings.TrimSpace(operation) != "" {
+			binding.ApprovalRecords[i].Operation = strings.TrimSpace(operation)
+		}
+		if strings.TrimSpace(binding.ApprovalRecords[i].Target) == "" && strings.TrimSpace(target) != "" {
+			binding.ApprovalRecords[i].Target = strings.TrimSpace(target)
 		}
 		if strings.TrimSpace(reason) != "" {
 			binding.ApprovalRecords[i].Reason = strings.TrimSpace(reason)
@@ -642,12 +993,32 @@ func (a *Adapter) markPermissionPending(sessionID string, runID string, requestI
 		binding.ApprovalRecords = append(binding.ApprovalRecords, approvalEntry{
 			RequestID: normalizedRequestID,
 			ToolName:  strings.TrimSpace(toolName),
+			Operation: strings.TrimSpace(operation),
+			Target:    strings.TrimSpace(target),
 			Reason:    strings.TrimSpace(reason),
 			Decision:  "pending",
 		})
 	}
 	if strings.TrimSpace(reason) != "" {
 		binding.LastSummary = strings.TrimSpace(reason)
+	}
+
+	activeRequestID := strings.TrimSpace(a.runPermissionActiveRequest[key])
+
+	shouldDisplayOnPermissionCard := false
+	switch {
+	case activeRequestID == "":
+		a.runPermissionActiveRequest[key] = normalizedRequestID
+		shouldDisplayOnPermissionCard = true
+	case activeRequestID == normalizedRequestID:
+		shouldDisplayOnPermissionCard = true
+	case !isApprovalPendingDecision(findApprovalDecision(binding.ApprovalRecords, activeRequestID)):
+		// 当前卡面若已是"已审批"态，允许新请求直接抢占刷新为待审批。
+		a.runPermissionActiveRequest[key] = normalizedRequestID
+		shouldDisplayOnPermissionCard = true
+	default:
+		// 当前已有待审批请求正在展示，新请求仅记录到状态卡队列。
+		shouldDisplayOnPermissionCard = false
 	}
 	a.activeRuns[key] = binding
 	a.requestRuns[normalizedRequestID] = key
@@ -662,7 +1033,63 @@ func (a *Adapter) markPermissionPending(sessionID string, runID string, requestI
 			a.safeLog("update pending approval card failed: %v", err)
 		}
 	}
-	return shouldSendCard
+	if found && alreadyPending {
+		return false
+	}
+	return shouldDisplayOnPermissionCard
+}
+
+// upsertPermissionCard 在同一 run 内复用一张审批卡片，后续审批请求覆盖刷新该卡片。
+func (a *Adapter) upsertPermissionCard(
+	ctx context.Context,
+	sessionID string,
+	runID string,
+	chatID string,
+	payload PermissionCardPayload,
+) {
+	key := runBindingKey(sessionID, runID)
+	normalizedRequestID := strings.TrimSpace(payload.RequestID)
+	if key == "|" || normalizedRequestID == "" {
+		return
+	}
+
+	a.mu.RLock()
+	existingCardID := strings.TrimSpace(a.runPermissionCards[key])
+	a.mu.RUnlock()
+
+	if existingCardID == "" {
+		cardID, err := a.messenger.SendPermissionCard(ctx, chatID, payload)
+		if err != nil {
+			a.safeLog("permission card create failed request_id=%s err=%v", normalizedRequestID, err)
+			return
+		}
+		cardID = strings.TrimSpace(cardID)
+		if cardID == "" {
+			return
+		}
+		a.mu.Lock()
+		a.runPermissionCards[key] = cardID
+		a.rememberRunPermissionCardLocked(key, cardID)
+		a.permissionCardRuns[cardID] = key
+		a.permissionCards[normalizedRequestID] = cardID
+		a.runPermissionActiveRequest[key] = normalizedRequestID
+		a.mu.Unlock()
+		a.safeLog("permission card created request_id=%s card_id=%s run_key=%s", normalizedRequestID, cardID, key)
+		return
+	}
+
+	a.safeLog("permission card update start request_id=%s card_id=%s", normalizedRequestID, existingCardID)
+	if err := a.messenger.UpdatePendingPermissionCard(ctx, existingCardID, payload); err != nil {
+		a.safeLog("permission card update failed request_id=%s card_id=%s err=%v", normalizedRequestID, existingCardID, err)
+		return
+	}
+	a.mu.Lock()
+	a.rememberRunPermissionCardLocked(key, existingCardID)
+	a.permissionCardRuns[existingCardID] = key
+	a.permissionCards[normalizedRequestID] = existingCardID
+	a.runPermissionActiveRequest[key] = normalizedRequestID
+	a.mu.Unlock()
+	a.safeLog("permission card update done request_id=%s card_id=%s", normalizedRequestID, existingCardID)
 }
 
 // markUserQuestionPending 记录 ask_user 待回答问题，并挂接到 run 状态卡上下文。
@@ -756,26 +1183,68 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 	if normalizedRequestID == "" {
 		return
 	}
-	normalizedDecision := strings.TrimSpace(strings.ToLower(decision))
+	normalizedDecision := normalizeApprovalDecision(decision)
 	if normalizedDecision == "" {
 		return
 	}
 	a.mu.Lock()
+	if alreadyDecision, resolved := a.resolvedPermissions[normalizedRequestID]; resolved &&
+		normalizeApprovalDecision(alreadyDecision) == normalizedDecision {
+		a.mu.Unlock()
+		return
+	}
 	key := a.requestRuns[normalizedRequestID]
 	binding, ok := a.activeRuns[key]
-	var approvalEntry *approvalEntry
+	var resolvedApproval *approvalEntry
+	hasNextPendingPayload := false
+	activeRequestID := strings.TrimSpace(a.runPermissionActiveRequest[key])
+	shouldTouchPermissionCard := activeRequestID == "" || activeRequestID == normalizedRequestID
 	if ok {
-		status := "approved"
-		if normalizedDecision == "reject" {
-			status = "rejected"
-		}
-		binding.ApprovalStatus = status
 		for i := range binding.ApprovalRecords {
 			if binding.ApprovalRecords[i].RequestID == normalizedRequestID {
 				binding.ApprovalRecords[i].Decision = normalizedDecision
 				entry := binding.ApprovalRecords[i]
-				approvalEntry = &entry
-				break
+				resolvedApproval = &entry
+			}
+		}
+		approved := 0
+		rejected := 0
+		pending := 0
+		for _, entry := range binding.ApprovalRecords {
+			switch {
+			case isApprovalApprovedDecision(entry.Decision):
+				approved++
+			case isApprovalRejectedDecision(entry.Decision):
+				rejected++
+			case isApprovalPendingDecision(entry.Decision):
+				pending++
+			}
+		}
+		switch {
+		case pending > 0:
+			binding.ApprovalStatus = "pending"
+		case rejected > 0 && approved == 0:
+			binding.ApprovalStatus = "rejected"
+		case approved > 0 && rejected == 0:
+			binding.ApprovalStatus = "approved"
+		case approved > 0 && rejected > 0:
+			binding.ApprovalStatus = "mixed"
+		default:
+			binding.ApprovalStatus = "none"
+		}
+		if shouldTouchPermissionCard {
+			for _, entry := range binding.ApprovalRecords {
+				candidate := strings.TrimSpace(entry.RequestID)
+				if candidate == "" || candidate == normalizedRequestID {
+					continue
+				}
+				if !isApprovalPendingDecision(entry.Decision) {
+					continue
+				}
+				if _, ok := buildPendingPermissionPayload(binding, candidate); ok {
+					hasNextPendingPayload = true
+					break
+				}
 			}
 		}
 		a.activeRuns[key] = binding
@@ -786,7 +1255,11 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 		statusCardID = strings.TrimSpace(binding.CardID)
 		statusPayload = binding.statusCardPayload()
 	}
-	permCardID := a.permissionCards[normalizedRequestID]
+	permCardID := strings.TrimSpace(a.permissionCards[normalizedRequestID])
+	if permCardID == "" {
+		permCardID = strings.TrimSpace(a.runPermissionCards[key])
+	}
+	historyCardIDs := a.runPermissionCardIDsLocked(key)
 	a.resolvedPermissions[normalizedRequestID] = normalizedDecision
 	a.mu.Unlock()
 
@@ -797,21 +1270,126 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 		}
 	}
 
-	// 更新权限卡片为已处理状态（去掉按钮，显示结果）
-	if permCardID != "" {
+	// 更新权限卡片为已处理状态（去掉按钮，显示结果）。
+	// 仅当当前审批卡正在展示该 request 时才更新，避免旧请求回写覆盖新请求卡面。
+	resolvedCardUpdated := false
+	if permCardID != "" && shouldTouchPermissionCard {
+		a.safeLog("permission card update start request_id=%s card_id=%s decision=%s", normalizedRequestID, permCardID, normalizedDecision)
 		resolvedPayload := ResolvedPermissionCardPayload{
 			RequestID: normalizedRequestID,
 			Approved:  normalizedDecision != "reject",
 		}
-		if approvalEntry != nil {
-			resolvedPayload.ToolName = approvalEntry.ToolName
-			resolvedPayload.Message = approvalEntry.Reason
+		if resolvedApproval != nil {
+			resolvedPayload.ToolName = resolvedApproval.ToolName
+			resolvedPayload.Message = resolvedApproval.Reason
 		}
 		if err := a.messenger.UpdatePermissionCard(context.Background(), permCardID, resolvedPayload); err != nil {
 			a.safeLog("update permission card failed: %v", err)
 		} else {
-			a.schedulePermissionCardDismiss(normalizedRequestID, permCardID)
+			resolvedCardUpdated = true
+			a.safeLog("permission card update done request_id=%s card_id=%s decision=%s", normalizedRequestID, permCardID, normalizedDecision)
 		}
+	}
+	if resolvedCardUpdated {
+		resolvedPayload := ResolvedPermissionCardPayload{
+			RequestID: normalizedRequestID,
+			Approved:  normalizedDecision != "reject",
+		}
+		if resolvedApproval != nil {
+			resolvedPayload.ToolName = resolvedApproval.ToolName
+			resolvedPayload.Operation = resolvedApproval.Operation
+			resolvedPayload.Target = resolvedApproval.Target
+			resolvedPayload.Message = resolvedApproval.Reason
+		}
+		for _, cardID := range historyCardIDs {
+			if strings.TrimSpace(cardID) == "" || strings.TrimSpace(cardID) == strings.TrimSpace(permCardID) {
+				continue
+			}
+			if err := a.messenger.UpdatePermissionCard(context.Background(), cardID, resolvedPayload); err != nil {
+				a.safeLog(
+					"update historical permission card failed request_id=%s card_id=%s err=%v",
+					normalizedRequestID,
+					cardID,
+					err,
+				)
+				continue
+			}
+			a.safeLog(
+				"update historical permission card done request_id=%s card_id=%s decision=%s",
+				normalizedRequestID,
+				cardID,
+				normalizedDecision,
+			)
+		}
+	}
+	if resolvedCardUpdated && permCardID != "" && hasNextPendingPayload {
+		// 先短暂展示"已审批"，再切换到下一条待审批。
+		time.Sleep(1200 * time.Millisecond)
+		// 重新在锁下获取当前 pending 请求，避免延迟期间被其他回调更改。
+		a.mu.Lock()
+		currentBinding, bindingStillActive := a.activeRuns[key]
+		activeAfterDelay := strings.TrimSpace(a.runPermissionActiveRequest[key])
+		stillCurrent := bindingStillActive && activeAfterDelay == normalizedRequestID
+		var refreshedNextPayload PermissionCardPayload
+		hasRefreshedNext := false
+		if stillCurrent {
+			for _, entry := range currentBinding.ApprovalRecords {
+				candidate := strings.TrimSpace(entry.RequestID)
+				if candidate == "" || candidate == normalizedRequestID {
+					continue
+				}
+				if !isApprovalPendingDecision(entry.Decision) {
+					continue
+				}
+				if payload, ok := buildPendingPermissionPayload(currentBinding, candidate); ok {
+					refreshedNextPayload = payload
+					hasRefreshedNext = true
+					break
+				}
+			}
+		}
+		a.mu.Unlock()
+		if stillCurrent && hasRefreshedNext {
+			if err := a.messenger.UpdatePendingPermissionCard(context.Background(), permCardID, refreshedNextPayload); err != nil {
+				a.safeLog(
+					"restore pending permission card failed request_id=%s next_request_id=%s card_id=%s err=%v",
+					normalizedRequestID,
+					refreshedNextPayload.RequestID,
+					permCardID,
+					err,
+				)
+			} else {
+				a.mu.Lock()
+				a.runPermissionActiveRequest[key] = strings.TrimSpace(refreshedNextPayload.RequestID)
+				a.permissionCards[strings.TrimSpace(refreshedNextPayload.RequestID)] = permCardID
+				a.mu.Unlock()
+				a.safeLog(
+					"restore pending permission card done request_id=%s next_request_id=%s card_id=%s",
+					normalizedRequestID,
+					refreshedNextPayload.RequestID,
+					permCardID,
+				)
+			}
+		} else if stillCurrent && !hasRefreshedNext {
+			a.mu.Lock()
+			if strings.TrimSpace(a.runPermissionActiveRequest[key]) == normalizedRequestID {
+				delete(a.runPermissionActiveRequest, key)
+			}
+			a.mu.Unlock()
+		}
+	} else if shouldTouchPermissionCard && resolvedCardUpdated {
+		a.mu.Lock()
+		if strings.TrimSpace(a.runPermissionActiveRequest[key]) == normalizedRequestID {
+			delete(a.runPermissionActiveRequest, key)
+		}
+		a.mu.Unlock()
+	}
+	shouldCleanupRequestMapping := true
+	if shouldCleanupRequestMapping {
+		a.mu.Lock()
+		delete(a.permissionCards, normalizedRequestID)
+		delete(a.requestRuns, normalizedRequestID)
+		a.mu.Unlock()
 	}
 }
 
@@ -847,6 +1425,11 @@ func (a *Adapter) schedulePermissionCardDismiss(requestID string, cardID string)
 // markRunTerminal 在 run 结束时合并结果摘要并刷新状态卡片。
 func (a *Adapter) markRunTerminal(sessionID string, runID string, result string, summary string, fallback string) {
 	key := runBindingKey(sessionID, runID)
+	type permissionFinalize struct {
+		requestID string
+		cardID    string
+		payload   ResolvedPermissionCardPayload
+	}
 	a.mu.Lock()
 	binding, ok := a.activeRuns[key]
 	if !ok {
@@ -858,15 +1441,123 @@ func (a *Adapter) markRunTerminal(sessionID string, runID string, result string,
 	} else if strings.TrimSpace(fallback) != "" {
 		binding.LastSummary = strings.TrimSpace(fallback)
 	}
-	binding.Result = strings.TrimSpace(result)
-	binding.Status = "running"
+	normalizedResult := strings.TrimSpace(strings.ToLower(result))
+	binding.Result = normalizedResult
+	binding.Status = terminalStatusFromResult(normalizedResult)
+	finalizeCards := make([]permissionFinalize, 0)
+	runPermissionCardID := strings.TrimSpace(a.runPermissionCards[key])
+	pendingApprovals := 0
+	lastResolvedApproval := approvalEntry{}
+	hasLastResolvedApproval := false
+	for _, entry := range binding.ApprovalRecords {
+		requestID := strings.TrimSpace(entry.RequestID)
+		if requestID == "" {
+			continue
+		}
+		decision := normalizeApprovalDecision(entry.Decision)
+		if isApprovalPendingDecision(decision) {
+			pendingApprovals++
+			continue
+		}
+		if !isApprovalApprovedDecision(decision) && !isApprovalRejectedDecision(decision) {
+			continue
+		}
+		lastResolvedApproval = entry
+		hasLastResolvedApproval = true
+		cardID := strings.TrimSpace(a.permissionCards[requestID])
+		if cardID == "" {
+			continue
+		}
+		finalizeCards = append(finalizeCards, permissionFinalize{
+			requestID: requestID,
+			cardID:    cardID,
+			payload: ResolvedPermissionCardPayload{
+				RequestID: requestID,
+				ToolName:  strings.TrimSpace(entry.ToolName),
+				Operation: strings.TrimSpace(entry.Operation),
+				Target:    strings.TrimSpace(entry.Target),
+				Message:   strings.TrimSpace(entry.Reason),
+				Approved:  isApprovalApprovedDecision(decision),
+			},
+		})
+	}
+	if pendingApprovals == 0 && hasLastResolvedApproval {
+		decision := normalizeApprovalDecision(lastResolvedApproval.Decision)
+		payload := ResolvedPermissionCardPayload{
+			RequestID: strings.TrimSpace(lastResolvedApproval.RequestID),
+			ToolName:  strings.TrimSpace(lastResolvedApproval.ToolName),
+			Operation: strings.TrimSpace(lastResolvedApproval.Operation),
+			Target:    strings.TrimSpace(lastResolvedApproval.Target),
+			Message:   strings.TrimSpace(lastResolvedApproval.Reason),
+			Approved:  isApprovalApprovedDecision(decision),
+		}
+		queuedCardIDs := make(map[string]struct{})
+		for _, item := range finalizeCards {
+			queuedCardIDs[strings.TrimSpace(item.cardID)] = struct{}{}
+		}
+		if runPermissionCardID != "" {
+			if _, exists := queuedCardIDs[runPermissionCardID]; !exists {
+				finalizeCards = append(finalizeCards, permissionFinalize{
+					requestID: strings.TrimSpace(lastResolvedApproval.RequestID),
+					cardID:    runPermissionCardID,
+					payload:   payload,
+				})
+				queuedCardIDs[runPermissionCardID] = struct{}{}
+			}
+		}
+		for _, historyCardID := range a.runPermissionCardIDsLocked(key) {
+			if historyCardID == "" {
+				continue
+			}
+			if _, exists := queuedCardIDs[historyCardID]; exists {
+				continue
+			}
+			finalizeCards = append(finalizeCards, permissionFinalize{
+				requestID: strings.TrimSpace(lastResolvedApproval.RequestID),
+				cardID:    historyCardID,
+				payload:   payload,
+			})
+			queuedCardIDs[historyCardID] = struct{}{}
+		}
+	}
 	cardID := strings.TrimSpace(binding.CardID)
+	chatID := strings.TrimSpace(binding.ChatID)
 	payload := binding.statusCardPayload()
 	a.activeRuns[key] = binding
 	a.mu.Unlock()
+	for _, item := range finalizeCards {
+		callCtx, cancel := context.WithTimeout(context.Background(), a.cfg.RequestTimeout)
+		err := a.messenger.UpdatePermissionCard(callCtx, item.cardID, item.payload)
+		cancel()
+		if err != nil {
+			a.safeLog("finalize permission card failed request_id=%s card_id=%s err=%v", item.requestID, item.cardID, err)
+			continue
+		}
+		a.mu.Lock()
+		delete(a.permissionCards, item.requestID)
+		delete(a.requestRuns, item.requestID)
+		a.mu.Unlock()
+	}
 	if cardID != "" {
-		if err := a.messenger.UpdateCard(context.Background(), cardID, payload); err != nil {
+		callCtx, cancel := context.WithTimeout(context.Background(), a.cfg.RequestTimeout)
+		err := a.messenger.UpdateCard(callCtx, cardID, payload)
+		cancel()
+		if err != nil {
 			a.safeLog("update terminal card failed: %v", err)
+			if chatID != "" {
+				terminalText := buildTerminalFallbackText(normalizedResult, binding.LastSummary)
+				if sendErr := a.messenger.SendText(context.Background(), chatID, terminalText); sendErr != nil {
+					a.safeLog("send terminal fallback text failed: %v", sendErr)
+				}
+			}
+		}
+		return
+	}
+	a.safeLog("markRunTerminal skipped card update: empty card_id session_id=%s run_id=%s result=%s", sessionID, runID, strings.TrimSpace(result))
+	if chatID != "" {
+		terminalText := buildTerminalFallbackText(normalizedResult, binding.LastSummary)
+		if err := a.messenger.SendText(context.Background(), chatID, terminalText); err != nil {
+			a.safeLog("send terminal fallback text failed: %v", err)
 		}
 	}
 }
@@ -1108,7 +1799,7 @@ func resolveChoiceLabel(raw string, options []UserQuestionCardOption) (string, b
 	return "", false
 }
 
-// splitRequestAndBody 将“<request_id> <body>”文本分离为 request_id 与正文。
+// splitRequestAndBody 将"<request_id> <body>"文本分离为 request_id 与正文。
 func splitRequestAndBody(input string) (string, string) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" {
@@ -1126,7 +1817,7 @@ func splitRequestAndBody(input string) (string, string) {
 	return requestID, body
 }
 
-// splitMultiChoiceTokens 支持“逗号/中文逗号/竖线/空格”分隔的多选文本输入。
+// splitMultiChoiceTokens 支持"逗号/中文逗号/竖线/空格"分隔的多选文本输入。
 func splitMultiChoiceTokens(raw string) []string {
 	replacer := strings.NewReplacer("，", ",", "|", ",", "、", ",", ";", ",", "；", ",")
 	normalized := replacer.Replace(raw)
@@ -1204,6 +1895,101 @@ func extractPermissionRequest(envelope map[string]any) (requestID, toolName, ope
 		reason = "工具执行请求审批，请确认是否放行。"
 	}
 	return
+}
+
+// extractPermissionResolved 从 permission_resolved 事件中抽取 request_id 与决议结果。
+func extractPermissionResolved(envelope map[string]any) (requestID, decision string) {
+	payload, _ := envelope["payload"].(map[string]any)
+	if payload == nil {
+		return "", ""
+	}
+	requestID = strings.TrimSpace(readString(payload, "request_id"))
+	decision = strings.TrimSpace(strings.ToLower(readString(payload, "decision")))
+	return requestID, decision
+}
+
+// normalizeApprovalDecision 统一审批决议值，兼容 runtime 与卡片动作的不同枚举。
+func normalizeApprovalDecision(decision string) string {
+	switch strings.TrimSpace(strings.ToLower(decision)) {
+	case "allow", "allow_once":
+		return "allow_once"
+	case "allow_session":
+		return "allow_session"
+	case "deny", "denied", "reject", "rejected":
+		return "reject"
+	case "pending":
+		return "pending"
+	default:
+		return strings.TrimSpace(strings.ToLower(decision))
+	}
+}
+
+// isPermissionRequestNotFoundError 判断网关返回是否为"审批请求不存在/已过期"。
+func isPermissionRequestNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(message, "permission request") && strings.Contains(message, "not found")
+}
+
+// isApprovalApprovedDecision 判断审批是否为"通过"态。
+func isApprovalApprovedDecision(decision string) bool {
+	switch normalizeApprovalDecision(decision) {
+	case "allow_once", "allow_session":
+		return true
+	default:
+		return false
+	}
+}
+
+// isApprovalRejectedDecision 判断审批是否为"拒绝"态。
+func isApprovalRejectedDecision(decision string) bool {
+	return normalizeApprovalDecision(decision) == "reject"
+}
+
+// isApprovalPendingDecision 判断审批是否为"等待"态。
+func isApprovalPendingDecision(decision string) bool {
+	return normalizeApprovalDecision(decision) == "pending"
+}
+
+// buildPendingPermissionPayload 根据 run 内审批记录构造"待审批卡片"载荷。
+func buildPendingPermissionPayload(binding sessionBinding, requestID string) (PermissionCardPayload, bool) {
+	normalizedRequestID := strings.TrimSpace(requestID)
+	if normalizedRequestID == "" {
+		return PermissionCardPayload{}, false
+	}
+	for _, entry := range binding.ApprovalRecords {
+		if strings.TrimSpace(entry.RequestID) != normalizedRequestID {
+			continue
+		}
+		if !isApprovalPendingDecision(entry.Decision) {
+			return PermissionCardPayload{}, false
+		}
+		return PermissionCardPayload{
+			RequestID: normalizedRequestID,
+			ToolName:  strings.TrimSpace(entry.ToolName),
+			Operation: strings.TrimSpace(entry.Operation),
+			Target:    strings.TrimSpace(entry.Target),
+			Message:   strings.TrimSpace(entry.Reason),
+		}, true
+	}
+	return PermissionCardPayload{}, false
+}
+
+// findApprovalDecision 根据 request_id 查找审批决议；找不到时返回空字符串。
+func findApprovalDecision(records []approvalEntry, requestID string) string {
+	normalizedRequestID := strings.TrimSpace(requestID)
+	if normalizedRequestID == "" {
+		return ""
+	}
+	for _, entry := range records {
+		if strings.TrimSpace(entry.RequestID) != normalizedRequestID {
+			continue
+		}
+		return strings.TrimSpace(entry.Decision)
+	}
+	return ""
 }
 
 // extractUserQuestionRequest 从 user_question_requested 事件中抽取关键信息。
@@ -1366,7 +2152,7 @@ func buildCardActionDedupeKey(event FeishuCardActionEvent, actionType string) st
 	}
 	requestID := strings.TrimSpace(event.RequestID)
 	if actionType == "permission" {
-		return "card:permission:" + requestID + ":" + strings.TrimSpace(strings.ToLower(event.Decision))
+		return "card:permission:" + requestID + ":" + normalizeApprovalDecision(event.Decision)
 	}
 	return "card:user_question:" + requestID + ":" + strings.TrimSpace(strings.ToLower(event.Status))
 }
@@ -1484,12 +2270,14 @@ func extractUserVisibleErrorText(envelope map[string]any) string {
 		return ""
 	}
 	payload, _ := envelope["payload"].(map[string]any)
-	if payload == nil {
-		return ""
-	}
 	message := strings.TrimSpace(readString(payload, "message"))
 	if message == "" {
 		message = strings.TrimSpace(readString(payload, "error"))
+	}
+	// 兜底：gateway 异步 run 失败时直接以 {message} 作为 RuntimeEvent.Payload，
+	// 此时 envelope 即为 {code, message}，不存在内层 payload 包装。
+	if message == "" {
+		message = strings.TrimSpace(readString(envelope, "message"))
 	}
 	if message == "" {
 		return ""
@@ -1566,6 +2354,142 @@ func deriveRunStatus(runtimeType string, envelope map[string]any, current string
 	return current
 }
 
+// extractProgressLine 从 runtime 事件中提取可展示的过程文案。
+func extractProgressLine(runtimeType string, envelope map[string]any) string {
+	normalizedType := strings.TrimSpace(strings.ToLower(runtimeType))
+	payload, _ := envelope["payload"].(map[string]any)
+	switch normalizedType {
+	case "phase_changed":
+		if phase := strings.TrimSpace(readString(payload, "to")); phase != "" {
+			return "进入阶段：" + phase
+		}
+	case "tool_start":
+		toolName := strings.TrimSpace(readString(payload, "tool_name"))
+		operation := strings.TrimSpace(readString(payload, "operation"))
+		target := strings.TrimSpace(readString(payload, "target"))
+		if toolName == "" {
+			toolName = "unknown_tool"
+		}
+		parts := []string{toolName}
+		if operation != "" {
+			parts = append(parts, operation)
+		}
+		if target != "" {
+			parts = append(parts, target)
+		}
+		return "开始工具：" + strings.Join(parts, " · ")
+	case "tool_result":
+		toolName := strings.TrimSpace(readString(payload, "tool_name"))
+		if toolName == "" {
+			toolName = "工具"
+		}
+		if status := strings.TrimSpace(readString(payload, "status")); status != "" {
+			return fmt.Sprintf("%s完成：%s", toolName, status)
+		}
+		return toolName + "完成"
+	case "permission_requested":
+		toolName := strings.TrimSpace(readString(payload, "tool_name"))
+		if toolName == "" {
+			toolName = "工具操作"
+		}
+		return "等待审批：" + toolName
+	case "permission_resolved":
+		decision := normalizeApprovalDecision(strings.TrimSpace(readString(payload, "decision")))
+		if isApprovalRejectedDecision(decision) {
+			return "审批结果：已拒绝"
+		}
+		return "审批结果：已通过"
+	case "user_question_requested":
+		return "等待用户回答问题"
+	case "user_question_answered":
+		return "用户已回答问题"
+	case "user_question_skipped":
+		return "用户已跳过问题"
+	case "run_error":
+		if msg := strings.TrimSpace(readString(payload, "message")); msg != "" {
+			return "执行失败：" + msg
+		}
+	case "run_done":
+		return "执行完成"
+	}
+	return ""
+}
+
+// appendProgressTrail 维护卡片"过程"列表，去重并保留固定长度。
+func appendProgressTrail(trail []string, line string, limit int) []string {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return trail
+	}
+	if len(trail) > 0 && strings.TrimSpace(trail[len(trail)-1]) == trimmed {
+		return trail
+	}
+	next := append(append([]string(nil), trail...), trimmed)
+	if limit <= 0 {
+		limit = defaultProgressTrailLimit
+	}
+	if len(next) > limit {
+		next = append([]string(nil), next[len(next)-limit:]...)
+	}
+	return next
+}
+
+// equalStringSlices 判断两个字符串切片内容是否一致。
+func equalStringSlices(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for idx := range left {
+		if left[idx] != right[idx] {
+			return false
+		}
+	}
+	return true
+}
+
+// shouldMarkRunStalled 判断 run 是否进入"僵尸态"：未结束且长时间未收到事件。
+func shouldMarkRunStalled(binding sessionBinding, now time.Time) bool {
+	if strings.TrimSpace(strings.ToLower(binding.Result)) != "pending" {
+		return false
+	}
+	if strings.TrimSpace(strings.ToLower(binding.ApprovalStatus)) == "pending" {
+		return false
+	}
+	if binding.LastEventTime.IsZero() {
+		return false
+	}
+	return now.Sub(binding.LastEventTime) > defaultRunStallTimeout
+}
+
+// terminalStatusFromResult 将终态结果映射为卡片状态字段，避免 run 已结束仍显示 running。
+func terminalStatusFromResult(result string) string {
+	switch strings.TrimSpace(strings.ToLower(result)) {
+	case "success":
+		return "success"
+	case "failure":
+		return "failure"
+	case "interrupted":
+		return "interrupted"
+	default:
+		return "running"
+	}
+}
+
+// buildTerminalFallbackText 在终态卡片更新失败时提供可见文本回退，避免飞书侧感知为"无响应"。
+func buildTerminalFallbackText(result string, summary string) string {
+	trimmedSummary := strings.TrimSpace(summary)
+	if strings.TrimSpace(strings.ToLower(result)) == "success" {
+		if trimmedSummary != "" {
+			return "任务已完成：\n" + trimmedSummary
+		}
+		return "任务已完成。"
+	}
+	if trimmedSummary != "" {
+		return "任务执行失败：\n" + trimmedSummary
+	}
+	return "任务执行失败，请稍后重试。"
+}
+
 // buildTaskName 生成卡片标题中使用的任务摘要，保留原始输入首行信息且控制长度。
 func buildTaskName(text string) string {
 	trimmed := strings.TrimSpace(text)
@@ -1603,12 +2527,13 @@ func (b sessionBinding) statusCardPayload() StatusCardPayload {
 	pendingCount := 0
 	records := make([]ApprovalRecord, 0, len(b.ApprovalRecords))
 	for _, e := range b.ApprovalRecords {
-		if e.Decision == "pending" {
+		normalizedDecision := normalizeApprovalDecision(e.Decision)
+		if isApprovalPendingDecision(normalizedDecision) {
 			pendingCount++
 		}
 		records = append(records, ApprovalRecord{
 			ToolName: e.ToolName,
-			Decision: e.Decision,
+			Decision: normalizedDecision,
 		})
 	}
 	return StatusCardPayload{
@@ -1619,6 +2544,7 @@ func (b sessionBinding) statusCardPayload() StatusCardPayload {
 		PendingCount:    pendingCount,
 		Result:          b.Result,
 		Summary:         b.LastSummary,
+		ProgressLines:   append([]string(nil), b.ProgressTrail...),
 		AsyncRewakeHint: b.AsyncRewakeHint,
 		Elapsed:         formatElapsed(b.RunStartTime),
 	}

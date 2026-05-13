@@ -222,6 +222,9 @@ func (s *stubFeishuGatewayClient) BindStream(context.Context, string, string) er
 	return nil
 }
 func (s *stubFeishuGatewayClient) Run(context.Context, string, string, string) error { return nil }
+func (s *stubFeishuGatewayClient) CancelRun(context.Context, string, string) (bool, error) {
+	return true, nil
+}
 func (s *stubFeishuGatewayClient) ResolvePermission(context.Context, string, string) error {
 	return nil
 }
@@ -244,6 +247,9 @@ type stubFeishuMessenger struct{}
 func (stubFeishuMessenger) SendText(context.Context, string, string) error { return nil }
 func (stubFeishuMessenger) SendPermissionCard(context.Context, string, feishuadapter.PermissionCardPayload) (string, error) {
 	return "", nil
+}
+func (stubFeishuMessenger) UpdatePendingPermissionCard(context.Context, string, feishuadapter.PermissionCardPayload) error {
+	return nil
 }
 func (stubFeishuMessenger) UpdatePermissionCard(context.Context, string, feishuadapter.ResolvedPermissionCardPayload) error {
 	return nil
