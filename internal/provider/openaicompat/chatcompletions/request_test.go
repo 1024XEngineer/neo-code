@@ -114,6 +114,22 @@ func TestBuildRequestThinkingConfigAndContinuity(t *testing.T) {
 	if disabled.ReasoningEffort != "" {
 		t.Fatalf("expected disabled reasoning effort to be omitted, got %q", disabled.ReasoningEffort)
 	}
+
+	mimoPayload, err := BuildRequest(context.Background(), provider.RuntimeConfig{
+		DefaultModel: "mimo-v2-pro",
+		BaseURL:      "https://token-plan-cn.xiaomimimo.com/v1",
+	}, providertypes.GenerateRequest{
+		Messages: []providertypes.Message{
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
+		},
+		ThinkingConfig: &providertypes.ThinkingConfig{Enabled: true, Effort: "high"},
+	})
+	if err != nil {
+		t.Fatalf("BuildRequest() mimo error = %v", err)
+	}
+	if mimoPayload.ReasoningEffort != "" {
+		t.Fatalf("expected mimo request to omit reasoning_effort, got %q", mimoPayload.ReasoningEffort)
+	}
 }
 
 func TestBuildRequestAndToOpenAIMessageErrors(t *testing.T) {

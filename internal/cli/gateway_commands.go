@@ -126,7 +126,12 @@ func newGatewayServerCommand(use, short string, readWorkdir func(*cobra.Command)
 		},
 	}
 
-	cmd.Flags().StringVar(&options.ListenAddress, "listen", "", "gateway listen address (optional override)")
+	cmd.Flags().StringVar(
+		&options.ListenAddress,
+		"listen",
+		"",
+		"gateway IPC listen address override (Windows named pipe / Unix socket path)",
+	)
 	cmd.Flags().StringVar(
 		&options.HTTPAddress,
 		"http-listen",

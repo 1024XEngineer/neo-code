@@ -323,6 +323,23 @@ func buildStatusCard(payload StatusCardPayload) map[string]any {
 		})
 	}
 
+	if len(payload.ProgressLines) > 0 {
+		lines := make([]string, 0, len(payload.ProgressLines))
+		for _, line := range payload.ProgressLines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+			lines = append(lines, "- "+trimmed)
+		}
+		if len(lines) > 0 {
+			elements = append(elements, map[string]any{
+				"tag":  "div",
+				"text": map[string]any{"tag": "lark_md", "content": "---\n**过程**\n" + strings.Join(lines, "\n")},
+			})
+		}
+	}
+
 	if summary := strings.TrimSpace(payload.Summary); summary != "" {
 		elements = append(elements, map[string]any{
 			"tag":  "div",
@@ -412,7 +429,14 @@ func buildApprovalRecordsElement(records []ApprovalRecord, pendingCount int) map
 
 	summaryParts := make([]string, 0, 4)
 	if totalCount > 0 {
-		summaryParts = append(summaryParts, fmt.Sprintf("%d/%d 已处理", processedCount, totalCount))
+		switch {
+		case pendingCount == 0 && rejectedCount == totalCount:
+			summaryParts = append(summaryParts, fmt.Sprintf("%d/%d 已拒绝", rejectedCount, totalCount))
+		case pendingCount == 0 && approvedCount == totalCount:
+			summaryParts = append(summaryParts, fmt.Sprintf("%d/%d 已通过", approvedCount, totalCount))
+		default:
+			summaryParts = append(summaryParts, fmt.Sprintf("%d/%d 已审批", processedCount, totalCount))
+		}
 	}
 	if approvedCount > 0 {
 		summaryParts = append(summaryParts, fmt.Sprintf("%d 通过", approvedCount))
@@ -462,6 +486,8 @@ func statusIconAndColor(status string) (string, string) {
 		return "🎉", "green"
 	case "failure":
 		return "💥", "red"
+	case "interrupted":
+		return "⏹️", "orange"
 	default:
 		return "🔵", "blue"
 	}

@@ -222,6 +222,9 @@ func (s *stubFeishuGatewayClient) BindStream(context.Context, string, string) er
 	return nil
 }
 func (s *stubFeishuGatewayClient) Run(context.Context, string, string, string) error { return nil }
+func (s *stubFeishuGatewayClient) CancelRun(context.Context, string, string) (bool, error) {
+	return true, nil
+}
 func (s *stubFeishuGatewayClient) ResolvePermission(context.Context, string, string) error {
 	return nil
 }

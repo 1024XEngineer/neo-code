@@ -102,6 +102,7 @@ type GatewayClient interface {
 	Authenticate(ctx context.Context) error
 	BindStream(ctx context.Context, sessionID string, runID string) error
 	Run(ctx context.Context, sessionID string, runID string, inputText string) error
+	CancelRun(ctx context.Context, sessionID string, runID string) (bool, error)
 	ResolvePermission(ctx context.Context, requestID string, decision string) error
 	ResolveUserQuestion(ctx context.Context, requestID string, status string, values []string, message string) error
 	Ping(ctx context.Context) error
@@ -182,6 +183,7 @@ type StatusCardPayload struct {
 	PendingCount    int
 	Result          string
 	Summary         string
+	ProgressLines   []string
 	AsyncRewakeHint string
 	Elapsed         string
 }
