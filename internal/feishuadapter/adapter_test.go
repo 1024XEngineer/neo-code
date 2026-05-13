@@ -678,7 +678,7 @@ func TestGatewayEventsUpdateStatusCard(t *testing.T) {
 	}
 }
 
-func TestPermissionApprovalDoesNotRevertToPendingAndDismissesCard(t *testing.T) {
+func TestPermissionApprovalDoesNotRevertToPendingAndKeepsResolvedCard(t *testing.T) {
 	adapter := newTestAdapter(t)
 	adapter.permissionCardDismissDelay = 5 * time.Millisecond
 	if err := adapter.bindThenRun(context.Background(), "session-approval", "run-approval", "chat-approval", "执行审批任务"); err != nil {
@@ -742,8 +742,118 @@ func TestPermissionApprovalDoesNotRevertToPendingAndDismissesCard(t *testing.T) 
 	if !updatedResolved {
 		t.Fatalf("expected resolved permission card update, msgs=%#v", msgs)
 	}
-	if !deletedResolvedCard {
-		t.Fatalf("expected resolved permission card deletion, msgs=%#v", msgs)
+	if deletedResolvedCard {
+		t.Fatalf("resolved permission card should stay visible in queue mode, msgs=%#v", msgs)
+	}
+	if lastApprovalStatus != "approved" {
+		t.Fatalf("last approval status = %q, want approved; msgs=%#v", lastApprovalStatus, msgs)
+	}
+}
+
+func TestPermissionApprovalsQueueSingleActiveCard(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if err := adapter.bindThenRun(context.Background(), "session-queue", "run-queue", "chat-queue", "执行审批队列任务"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-queue", "run-queue", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-queue-1",
+			"reason":     "审批一",
+		},
+	})
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-queue", "run-queue", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-queue-2",
+			"reason":     "审批二",
+		},
+	})
+	time.Sleep(40 * time.Millisecond)
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	cardSendBeforeResolve := 0
+	for _, message := range msgs {
+		if message.kind == "card" {
+			cardSendBeforeResolve++
+		}
+	}
+	if cardSendBeforeResolve != 1 {
+		t.Fatalf("permission cards before resolve = %d, want 1; msgs=%#v", cardSendBeforeResolve, msgs)
+	}
+
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		RequestID: "perm-queue-1",
+		Decision:  "allow_once",
+	}); err != nil {
+		t.Fatalf("handle first card action: %v", err)
+	}
+	time.Sleep(40 * time.Millisecond)
+
+	msgs = adapterTestMessenger(adapter).snapshot()
+	totalCardSend := 0
+	foundNextCard := false
+	for _, message := range msgs {
+		if message.kind != "card" {
+			continue
+		}
+		totalCardSend++
+		if message.card.RequestID == "perm-queue-2" {
+			foundNextCard = true
+		}
+	}
+	if totalCardSend != 2 {
+		t.Fatalf("permission cards total after first resolve = %d, want 2; msgs=%#v", totalCardSend, msgs)
+	}
+	if !foundNextCard {
+		t.Fatalf("expected queued second permission card after first resolve, msgs=%#v", msgs)
+	}
+}
+
+func TestPermissionResolvedEventUpdatesPermissionCard(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if err := adapter.bindThenRun(context.Background(), "session-resolve", "run-resolve", "chat-resolve", "执行审批事件任务"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-resolve", "run-resolve", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-resolve-1",
+			"tool_name":  "filesystem_write_file",
+			"reason":     "需要写文件权限",
+		},
+	})
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-resolve", "run-resolve", "run_progress", map[string]any{
+		"runtime_event_type": "permission_resolved",
+		"payload": map[string]any{
+			"request_id": "perm-resolve-1",
+			"decision":   "allow_once",
+		},
+	})
+	time.Sleep(40 * time.Millisecond)
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	updatedResolved := false
+	lastApprovalStatus := ""
+	for _, message := range msgs {
+		if message.kind == "update_perm_card" && message.resolvedCard != nil &&
+			message.resolvedCard.RequestID == "perm-resolve-1" && message.resolvedCard.Approved {
+			updatedResolved = true
+		}
+		if message.kind == "update_card" {
+			lastApprovalStatus = message.runCard.ApprovalStatus
+		}
+	}
+	if !updatedResolved {
+		t.Fatalf("expected resolved permission card update from permission_resolved event, msgs=%#v", msgs)
 	}
 	if lastApprovalStatus != "approved" {
 		t.Fatalf("last approval status = %q, want approved; msgs=%#v", lastApprovalStatus, msgs)
@@ -820,7 +930,7 @@ func TestRunTerminalEventUntracksActiveRun(t *testing.T) {
 	}
 }
 
-func TestRefreshActiveCardsMarksStalledRunAsFailure(t *testing.T) {
+func TestRefreshActiveCardsDoesNotForceFailStalledRun(t *testing.T) {
 	adapter := newTestAdapter(t)
 	base := time.Now().UTC()
 	adapter.nowFn = func() time.Time { return base }
@@ -836,25 +946,13 @@ func TestRefreshActiveCardsMarksStalledRunAsFailure(t *testing.T) {
 	adapter.refreshActiveCards(context.Background())
 
 	adapter.mu.RLock()
-	_, exists := adapter.activeRuns[runBindingKey(sessionID, runID)]
+	binding, exists := adapter.activeRuns[runBindingKey(sessionID, runID)]
 	adapter.mu.RUnlock()
-	if exists {
-		t.Fatalf("expected stalled run to be untracked")
+	if !exists {
+		t.Fatalf("expected stalled run to stay tracked")
 	}
-
-	msgs := adapterTestMessenger(adapter).snapshot()
-	foundFailure := false
-	for _, message := range msgs {
-		if message.kind != "update_card" {
-			continue
-		}
-		if message.runCard.Result == "failure" && strings.Contains(message.runCard.Summary, "超过 3 分钟未收到网关事件") {
-			foundFailure = true
-			break
-		}
-	}
-	if !foundFailure {
-		t.Fatalf("expected failure card update for stalled run, got %#v", msgs)
+	if strings.TrimSpace(strings.ToLower(binding.Result)) != "pending" {
+		t.Fatalf("result = %q, want pending", binding.Result)
 	}
 }
 

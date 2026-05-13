@@ -427,6 +427,11 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 						}
 						return
 					}
+				} else if strings.EqualFold(runtimeType, "permission_resolved") {
+					requestID, resolvedDecision := extractPermissionResolved(envelope)
+					if requestID != "" && resolvedDecision != "" {
+						a.updateApprovalStatus(requestID, resolvedDecision)
+					}
 				} else if strings.EqualFold(runtimeType, "user_question_requested") {
 					question := extractUserQuestionRequest(envelope)
 					if question.RequestID != "" {
@@ -557,6 +562,7 @@ func (a *Adapter) refreshActiveCardsLoop(ctx context.Context) {
 }
 
 // refreshActiveCards 对当前所有活跃 run 更新卡片，仅刷新耗时字段变化。
+// 说明：超过静默阈值仅做告警，不在适配器侧强行终止 run，避免误伤长耗时但无中间事件的合法执行。
 func (a *Adapter) refreshActiveCards(ctx context.Context) {
 	now := a.nowFn()
 	staleRuns := make([]sessionBinding, 0)
@@ -565,7 +571,6 @@ func (a *Adapter) refreshActiveCards(ctx context.Context) {
 	for _, binding := range a.activeRuns {
 		if shouldMarkRunStalled(binding, now) {
 			staleRuns = append(staleRuns, binding)
-			continue
 		}
 		if strings.TrimSpace(binding.CardID) != "" {
 			snapshot = append(snapshot, binding)
@@ -575,19 +580,11 @@ func (a *Adapter) refreshActiveCards(ctx context.Context) {
 
 	for _, stale := range staleRuns {
 		a.safeLog(
-			"run stalled: mark terminal failure session_id=%s run_id=%s idle_for=%s",
+			"run stalled: no force-fail, waiting for terminal event session_id=%s run_id=%s idle_for=%s",
 			stale.SessionID,
 			stale.RunID,
 			now.Sub(stale.LastEventTime).String(),
 		)
-		a.markRunTerminal(
-			stale.SessionID,
-			stale.RunID,
-			"failure",
-			"",
-			"运行中断：超过 3 分钟未收到网关事件，请检查 gateway 连接、网络与证书配置。",
-		)
-		a.untrackRun(stale.SessionID, stale.RunID)
 	}
 
 	for _, binding := range snapshot {
@@ -721,6 +718,14 @@ func (a *Adapter) markPermissionPending(sessionID string, runID string, requestI
 	if strings.TrimSpace(reason) != "" {
 		binding.LastSummary = strings.TrimSpace(reason)
 	}
+	pendingCount := 0
+	for _, entry := range binding.ApprovalRecords {
+		if strings.TrimSpace(strings.ToLower(entry.Decision)) == "pending" {
+			pendingCount++
+		}
+	}
+	// 同一 run 仅展示一张待审批交互卡，后续审批排队等待前一条处理完成。
+	shouldSendCard = shouldSendCard && pendingCount == 1
 	a.activeRuns[key] = binding
 	a.requestRuns[normalizedRequestID] = key
 
@@ -835,20 +840,47 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 	a.mu.Lock()
 	key := a.requestRuns[normalizedRequestID]
 	binding, ok := a.activeRuns[key]
-	var approvalEntry *approvalEntry
+	var resolvedApproval *approvalEntry
+	var nextPending *approvalEntry
 	if ok {
-		status := "approved"
-		if normalizedDecision == "reject" {
-			status = "rejected"
-		}
-		binding.ApprovalStatus = status
 		for i := range binding.ApprovalRecords {
 			if binding.ApprovalRecords[i].RequestID == normalizedRequestID {
 				binding.ApprovalRecords[i].Decision = normalizedDecision
 				entry := binding.ApprovalRecords[i]
-				approvalEntry = &entry
-				break
+				resolvedApproval = &entry
 			}
+			if strings.TrimSpace(strings.ToLower(binding.ApprovalRecords[i].Decision)) == "pending" && nextPending == nil {
+				entry := binding.ApprovalRecords[i]
+				nextPending = &entry
+			}
+		}
+		approved := 0
+		rejected := 0
+		pending := 0
+		for _, entry := range binding.ApprovalRecords {
+			switch strings.TrimSpace(strings.ToLower(entry.Decision)) {
+			case "allow_once":
+				approved++
+			case "reject":
+				rejected++
+			case "pending":
+				pending++
+			}
+		}
+		switch {
+		case pending > 0:
+			binding.ApprovalStatus = "pending"
+			if nextPending != nil && strings.TrimSpace(nextPending.Reason) != "" {
+				binding.LastSummary = strings.TrimSpace(nextPending.Reason)
+			}
+		case rejected > 0 && approved == 0:
+			binding.ApprovalStatus = "rejected"
+		case approved > 0 && rejected == 0:
+			binding.ApprovalStatus = "approved"
+		case approved > 0 && rejected > 0:
+			binding.ApprovalStatus = "mixed"
+		default:
+			binding.ApprovalStatus = "none"
 		}
 		a.activeRuns[key] = binding
 	}
@@ -858,8 +890,9 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 		statusCardID = strings.TrimSpace(binding.CardID)
 		statusPayload = binding.statusCardPayload()
 	}
-	permCardID := a.permissionCards[normalizedRequestID]
+	permCardID := strings.TrimSpace(a.permissionCards[normalizedRequestID])
 	a.resolvedPermissions[normalizedRequestID] = normalizedDecision
+	chatID := strings.TrimSpace(binding.ChatID)
 	a.mu.Unlock()
 
 	// 更新状态卡片
@@ -869,21 +902,49 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 		}
 	}
 
-	// 更新权限卡片为已处理状态（去掉按钮，显示结果）
+	// 更新权限卡片为已处理状态（去掉按钮，显示结果）。
+	// 这里不先删映射，避免更新失败时丢失后续收敛机会。
+	resolvedCardUpdated := false
 	if permCardID != "" {
 		resolvedPayload := ResolvedPermissionCardPayload{
 			RequestID: normalizedRequestID,
 			Approved:  normalizedDecision != "reject",
 		}
-		if approvalEntry != nil {
-			resolvedPayload.ToolName = approvalEntry.ToolName
-			resolvedPayload.Message = approvalEntry.Reason
+		if resolvedApproval != nil {
+			resolvedPayload.ToolName = resolvedApproval.ToolName
+			resolvedPayload.Message = resolvedApproval.Reason
 		}
 		if err := a.messenger.UpdatePermissionCard(context.Background(), permCardID, resolvedPayload); err != nil {
 			a.safeLog("update permission card failed: %v", err)
 		} else {
-			a.schedulePermissionCardDismiss(normalizedRequestID, permCardID)
+			resolvedCardUpdated = true
 		}
+	}
+	if resolvedCardUpdated || permCardID == "" {
+		a.mu.Lock()
+		delete(a.permissionCards, normalizedRequestID)
+		delete(a.requestRuns, normalizedRequestID)
+		a.mu.Unlock()
+	}
+
+	// 队列模式：上一条审批处理后，若仍有待审批请求，则继续弹出下一条审批卡。
+	// 仅当上一条审批卡已收敛（更新成功或不存在）时再推进，避免并存多张可点卡。
+	if ok && nextPending != nil && chatID != "" && (resolvedCardUpdated || permCardID == "") {
+		cardID, err := a.messenger.SendPermissionCard(context.Background(), chatID, PermissionCardPayload{
+			RequestID: nextPending.RequestID,
+			ToolName:  nextPending.ToolName,
+			Message:   nextPending.Reason,
+		})
+		if err != nil {
+			a.safeLog("send next permission card failed: %v", err)
+			return
+		}
+		if strings.TrimSpace(cardID) == "" {
+			return
+		}
+		a.mu.Lock()
+		a.permissionCards[nextPending.RequestID] = cardID
+		a.mu.Unlock()
 	}
 }
 
@@ -919,6 +980,11 @@ func (a *Adapter) schedulePermissionCardDismiss(requestID string, cardID string)
 // markRunTerminal 在 run 结束时合并结果摘要并刷新状态卡片。
 func (a *Adapter) markRunTerminal(sessionID string, runID string, result string, summary string, fallback string) {
 	key := runBindingKey(sessionID, runID)
+	type permissionFinalize struct {
+		requestID string
+		cardID    string
+		payload   ResolvedPermissionCardPayload
+	}
 	a.mu.Lock()
 	binding, ok := a.activeRuns[key]
 	if !ok {
@@ -933,11 +999,49 @@ func (a *Adapter) markRunTerminal(sessionID string, runID string, result string,
 	normalizedResult := strings.TrimSpace(strings.ToLower(result))
 	binding.Result = normalizedResult
 	binding.Status = terminalStatusFromResult(normalizedResult)
+	finalizeCards := make([]permissionFinalize, 0)
+	for _, entry := range binding.ApprovalRecords {
+		requestID := strings.TrimSpace(entry.RequestID)
+		if requestID == "" {
+			continue
+		}
+		cardID := strings.TrimSpace(a.permissionCards[requestID])
+		if cardID == "" {
+			continue
+		}
+		decision := strings.TrimSpace(strings.ToLower(entry.Decision))
+		if decision != "allow_once" && decision != "reject" {
+			continue
+		}
+		finalizeCards = append(finalizeCards, permissionFinalize{
+			requestID: requestID,
+			cardID:    cardID,
+			payload: ResolvedPermissionCardPayload{
+				RequestID: requestID,
+				ToolName:  strings.TrimSpace(entry.ToolName),
+				Message:   strings.TrimSpace(entry.Reason),
+				Approved:  decision == "allow_once",
+			},
+		})
+	}
 	cardID := strings.TrimSpace(binding.CardID)
 	chatID := strings.TrimSpace(binding.ChatID)
 	payload := binding.statusCardPayload()
 	a.activeRuns[key] = binding
 	a.mu.Unlock()
+	for _, item := range finalizeCards {
+		callCtx, cancel := context.WithTimeout(context.Background(), a.cfg.RequestTimeout)
+		err := a.messenger.UpdatePermissionCard(callCtx, item.cardID, item.payload)
+		cancel()
+		if err != nil {
+			a.safeLog("finalize permission card failed request_id=%s card_id=%s err=%v", item.requestID, item.cardID, err)
+			continue
+		}
+		a.mu.Lock()
+		delete(a.permissionCards, item.requestID)
+		delete(a.requestRuns, item.requestID)
+		a.mu.Unlock()
+	}
 	if cardID != "" {
 		callCtx, cancel := context.WithTimeout(context.Background(), a.cfg.RequestTimeout)
 		err := a.messenger.UpdateCard(callCtx, cardID, payload)
@@ -1295,6 +1399,17 @@ func extractPermissionRequest(envelope map[string]any) (requestID, toolName, ope
 		reason = "工具执行请求审批，请确认是否放行。"
 	}
 	return
+}
+
+// extractPermissionResolved 从 permission_resolved 事件中抽取 request_id 与决议结果。
+func extractPermissionResolved(envelope map[string]any) (requestID, decision string) {
+	payload, _ := envelope["payload"].(map[string]any)
+	if payload == nil {
+		return "", ""
+	}
+	requestID = strings.TrimSpace(readString(payload, "request_id"))
+	decision = strings.TrimSpace(strings.ToLower(readString(payload, "decision")))
+	return requestID, decision
 }
 
 // extractUserQuestionRequest 从 user_question_requested 事件中抽取关键信息。
