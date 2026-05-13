@@ -73,32 +73,14 @@ func (m *feishuMessenger) SendPermissionCard(ctx context.Context, chatID string,
 	return m.sendMessage(ctx, chatID, "interactive", string(content))
 }
 
+// UpdatePendingPermissionCard 根据 card_id 覆盖更新审批卡片为新的待审批请求。
+func (m *feishuMessenger) UpdatePendingPermissionCard(ctx context.Context, cardID string, payload PermissionCardPayload) error {
+	return m.patchInteractiveCard(ctx, cardID, buildPermissionCard(payload))
+}
+
 // UpdatePermissionCard 根据 card_id 覆盖更新审批卡片为已处理状态。
 func (m *feishuMessenger) UpdatePermissionCard(ctx context.Context, cardID string, payload ResolvedPermissionCardPayload) error {
-	token, err := m.tenantAccessToken(ctx)
-	if err != nil {
-		return err
-	}
-	card := buildResolvedPermissionCard(payload)
-	content, err := json.Marshal(card)
-	if err != nil {
-		return err
-	}
-	body := map[string]string{
-		"content": string(content),
-	}
-	data, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-	url := strings.TrimRight(m.baseURL, "/") + "/open-apis/im/v1/messages/" + cardID
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(data))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	return m.doJSONRequest(req)
+	return m.patchInteractiveCard(ctx, cardID, buildResolvedPermissionCard(payload))
 }
 
 // DeleteMessage 根据 message_id 删除飞书消息，常用于审批卡片在完成后收起。
@@ -169,29 +151,7 @@ func (m *feishuMessenger) SendStatusCard(ctx context.Context, chatID string, pay
 
 // UpdateCard 根据 card_id 覆盖更新当前 run 的状态卡片内容。
 func (m *feishuMessenger) UpdateCard(ctx context.Context, cardID string, payload StatusCardPayload) error {
-	token, err := m.tenantAccessToken(ctx)
-	if err != nil {
-		return err
-	}
-	content, err := json.Marshal(buildStatusCard(payload))
-	if err != nil {
-		return err
-	}
-	body := map[string]string{
-		"content": string(content),
-	}
-	data, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-	url := strings.TrimRight(m.baseURL, "/") + "/open-apis/im/v1/messages/" + cardID
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(data))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	return m.doJSONRequest(req)
+	return m.patchInteractiveCard(ctx, cardID, buildStatusCard(payload))
 }
 
 // sendMessage 统一封装飞书消息发送请求，复用鉴权与错误处理。
@@ -247,6 +207,33 @@ func (m *feishuMessenger) doJSONRequestWithMessageID(req *http.Request) (string,
 func (m *feishuMessenger) doJSONRequest(req *http.Request) error {
 	_, err := m.doJSONRequestWithMessageID(req)
 	return err
+}
+
+// patchInteractiveCard 复用飞书消息 PATCH 接口更新交互卡片内容。
+func (m *feishuMessenger) patchInteractiveCard(ctx context.Context, cardID string, card map[string]any) error {
+	token, err := m.tenantAccessToken(ctx)
+	if err != nil {
+		return err
+	}
+	content, err := json.Marshal(card)
+	if err != nil {
+		return err
+	}
+	body := map[string]string{
+		"content": string(content),
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	url := strings.TrimRight(m.baseURL, "/") + "/open-apis/im/v1/messages/" + cardID
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	return m.doJSONRequest(req)
 }
 
 // tenantAccessToken 获取并缓存 tenant access token，避免每次发送都重复换取。

@@ -245,6 +245,9 @@ func (stubFeishuMessenger) SendText(context.Context, string, string) error { ret
 func (stubFeishuMessenger) SendPermissionCard(context.Context, string, feishuadapter.PermissionCardPayload) (string, error) {
 	return "", nil
 }
+func (stubFeishuMessenger) UpdatePendingPermissionCard(context.Context, string, feishuadapter.PermissionCardPayload) error {
+	return nil
+}
 func (stubFeishuMessenger) UpdatePermissionCard(context.Context, string, feishuadapter.ResolvedPermissionCardPayload) error {
 	return nil
 }

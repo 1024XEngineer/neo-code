@@ -111,6 +111,7 @@ type sentMessage struct {
 	kind                 string
 	text                 string
 	card                 PermissionCardPayload
+	updatedPendingCard   *PermissionCardPayload
 	userQuestionCard     UserQuestionCardPayload
 	runCard              StatusCardPayload
 	cardID               string
@@ -148,6 +149,13 @@ func (m *fakeMessenger) UpdatePermissionCard(_ context.Context, cardID string, p
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.messages = append(m.messages, sentMessage{chatID: cardID, kind: "update_perm_card", resolvedCard: &payload})
+	return nil
+}
+
+func (m *fakeMessenger) UpdatePendingPermissionCard(_ context.Context, cardID string, payload PermissionCardPayload) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messages = append(m.messages, sentMessage{chatID: cardID, kind: "update_pending_perm_card", updatedPendingCard: &payload})
 	return nil
 }
 
@@ -804,6 +812,73 @@ func TestPermissionApprovalsDoNotAutoPushQueuedCardOnResolve(t *testing.T) {
 	}
 	if totalCardSend != 1 {
 		t.Fatalf("permission cards total after first resolve = %d, want 1; msgs=%#v", totalCardSend, msgs)
+	}
+}
+
+func TestPermissionCardReusedAcrossSequentialRequests(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if err := adapter.bindThenRun(context.Background(), "session-reuse", "run-reuse", "chat-reuse", "执行审批复用任务"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-reuse", "run-reuse", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-reuse-1",
+			"reason":     "审批一",
+		},
+	})
+	time.Sleep(30 * time.Millisecond)
+
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		RequestID: "perm-reuse-1",
+		Decision:  "allow_once",
+	}); err != nil {
+		t.Fatalf("handle first card action: %v", err)
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-reuse", "run-reuse", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-reuse-2",
+			"reason":     "审批二",
+		},
+	})
+	time.Sleep(40 * time.Millisecond)
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	cardSends := 0
+	pendingUpdates := 0
+	resolvedUpdates := 0
+	lastPendingRequestID := ""
+	for _, message := range msgs {
+		switch message.kind {
+		case "card":
+			cardSends++
+		case "update_pending_perm_card":
+			pendingUpdates++
+			if message.updatedPendingCard != nil {
+				lastPendingRequestID = message.updatedPendingCard.RequestID
+			}
+		case "update_perm_card":
+			resolvedUpdates++
+		}
+	}
+	if cardSends != 1 {
+		t.Fatalf("permission card sends = %d, want 1; msgs=%#v", cardSends, msgs)
+	}
+	if pendingUpdates < 1 {
+		t.Fatalf("expected pending permission card update for second request, msgs=%#v", msgs)
+	}
+	if resolvedUpdates < 1 {
+		t.Fatalf("expected resolved permission card update for first request, msgs=%#v", msgs)
+	}
+	if lastPendingRequestID != "perm-reuse-2" {
+		t.Fatalf("last pending request id = %q, want perm-reuse-2; msgs=%#v", lastPendingRequestID, msgs)
 	}
 }
 
