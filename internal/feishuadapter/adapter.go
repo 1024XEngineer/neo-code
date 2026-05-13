@@ -423,6 +423,7 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 								a.mu.Lock()
 								a.permissionCards[requestID] = cardID
 								a.mu.Unlock()
+								a.safeLog("permission card created request_id=%s card_id=%s runtime_type=%s", requestID, strings.TrimSpace(cardID), runtimeType)
 							}
 						}
 						return
@@ -430,6 +431,7 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 				} else if strings.EqualFold(runtimeType, "permission_resolved") {
 					requestID, resolvedDecision := extractPermissionResolved(envelope)
 					if requestID != "" && resolvedDecision != "" {
+						a.safeLog("permission resolved event request_id=%s decision=%s", requestID, resolvedDecision)
 						a.updateApprovalStatus(requestID, resolvedDecision)
 					}
 				} else if strings.EqualFold(runtimeType, "user_question_requested") {
@@ -841,17 +843,12 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 	key := a.requestRuns[normalizedRequestID]
 	binding, ok := a.activeRuns[key]
 	var resolvedApproval *approvalEntry
-	var nextPending *approvalEntry
 	if ok {
 		for i := range binding.ApprovalRecords {
 			if binding.ApprovalRecords[i].RequestID == normalizedRequestID {
 				binding.ApprovalRecords[i].Decision = normalizedDecision
 				entry := binding.ApprovalRecords[i]
 				resolvedApproval = &entry
-			}
-			if isApprovalPendingDecision(binding.ApprovalRecords[i].Decision) && nextPending == nil {
-				entry := binding.ApprovalRecords[i]
-				nextPending = &entry
 			}
 		}
 		approved := 0
@@ -870,9 +867,6 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 		switch {
 		case pending > 0:
 			binding.ApprovalStatus = "pending"
-			if nextPending != nil && strings.TrimSpace(nextPending.Reason) != "" {
-				binding.LastSummary = strings.TrimSpace(nextPending.Reason)
-			}
 		case rejected > 0 && approved == 0:
 			binding.ApprovalStatus = "rejected"
 		case approved > 0 && rejected == 0:
@@ -892,7 +886,6 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 	}
 	permCardID := strings.TrimSpace(a.permissionCards[normalizedRequestID])
 	a.resolvedPermissions[normalizedRequestID] = normalizedDecision
-	chatID := strings.TrimSpace(binding.ChatID)
 	a.mu.Unlock()
 
 	// 更新状态卡片
@@ -906,6 +899,7 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 	// 这里不先删映射，避免更新失败时丢失后续收敛机会。
 	resolvedCardUpdated := false
 	if permCardID != "" {
+		a.safeLog("permission card update start request_id=%s card_id=%s decision=%s", normalizedRequestID, permCardID, normalizedDecision)
 		resolvedPayload := ResolvedPermissionCardPayload{
 			RequestID: normalizedRequestID,
 			Approved:  normalizedDecision != "reject",
@@ -918,32 +912,13 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 			a.safeLog("update permission card failed: %v", err)
 		} else {
 			resolvedCardUpdated = true
+			a.safeLog("permission card update done request_id=%s card_id=%s decision=%s", normalizedRequestID, permCardID, normalizedDecision)
 		}
 	}
 	if resolvedCardUpdated || permCardID == "" {
 		a.mu.Lock()
 		delete(a.permissionCards, normalizedRequestID)
 		delete(a.requestRuns, normalizedRequestID)
-		a.mu.Unlock()
-	}
-
-	// 队列模式：上一条审批处理后，若仍有待审批请求，则继续弹出下一条审批卡。
-	// 仅当上一条审批卡已收敛（更新成功或不存在）时再推进，避免并存多张可点卡。
-	if ok && nextPending != nil && chatID != "" && (resolvedCardUpdated || permCardID == "") {
-		cardID, err := a.messenger.SendPermissionCard(context.Background(), chatID, PermissionCardPayload{
-			RequestID: nextPending.RequestID,
-			ToolName:  nextPending.ToolName,
-			Message:   nextPending.Reason,
-		})
-		if err != nil {
-			a.safeLog("send next permission card failed: %v", err)
-			return
-		}
-		if strings.TrimSpace(cardID) == "" {
-			return
-		}
-		a.mu.Lock()
-		a.permissionCards[nextPending.RequestID] = cardID
 		a.mu.Unlock()
 	}
 }

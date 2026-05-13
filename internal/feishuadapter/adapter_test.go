@@ -750,7 +750,7 @@ func TestPermissionApprovalDoesNotRevertToPendingAndKeepsResolvedCard(t *testing
 	}
 }
 
-func TestPermissionApprovalsQueueSingleActiveCard(t *testing.T) {
+func TestPermissionApprovalsDoNotAutoPushQueuedCardOnResolve(t *testing.T) {
 	adapter := newTestAdapter(t)
 	if err := adapter.bindThenRun(context.Background(), "session-queue", "run-queue", "chat-queue", "执行审批队列任务"); err != nil {
 		t.Fatalf("bindThenRun: %v", err)
@@ -796,21 +796,14 @@ func TestPermissionApprovalsQueueSingleActiveCard(t *testing.T) {
 
 	msgs = adapterTestMessenger(adapter).snapshot()
 	totalCardSend := 0
-	foundNextCard := false
 	for _, message := range msgs {
 		if message.kind != "card" {
 			continue
 		}
 		totalCardSend++
-		if message.card.RequestID == "perm-queue-2" {
-			foundNextCard = true
-		}
 	}
-	if totalCardSend != 2 {
-		t.Fatalf("permission cards total after first resolve = %d, want 2; msgs=%#v", totalCardSend, msgs)
-	}
-	if !foundNextCard {
-		t.Fatalf("expected queued second permission card after first resolve, msgs=%#v", msgs)
+	if totalCardSend != 1 {
+		t.Fatalf("permission cards total after first resolve = %d, want 1; msgs=%#v", totalCardSend, msgs)
 	}
 }
 
