@@ -1317,6 +1317,63 @@ func TestPermissionResolvedEventUpdatesPermissionCard(t *testing.T) {
 	}
 }
 
+func TestUpdateApprovalStatusFinalizesHistoricalPermissionCards(t *testing.T) {
+	adapter := newTestAdapter(t)
+	sessionID := BuildSessionID("chat-approval-history")
+	runID := BuildRunID("msg-approval-history")
+	chatID := "chat-approval-history"
+	adapter.trackSession(sessionID, runID, chatID, "history permission task")
+	if err := adapter.ensureRunCard(context.Background(), sessionID, runID); err != nil {
+		t.Fatalf("ensureRunCard: %v", err)
+	}
+
+	key := runBindingKey(sessionID, runID)
+	adapter.mu.Lock()
+	binding := adapter.activeRuns[key]
+	binding.ApprovalRecords = []approvalEntry{
+		{
+			RequestID: "perm-history-1",
+			ToolName:  "filesystem_write_file",
+			Operation: "write_file",
+			Target:    "1.txt",
+			Reason:    "需要写文件权限",
+			Decision:  "pending",
+		},
+	}
+	adapter.activeRuns[key] = binding
+	adapter.requestRuns["perm-history-1"] = key
+	adapter.permissionCards["perm-history-1"] = "perm-card-current"
+	adapter.runPermissionCards[key] = "perm-card-current"
+	adapter.permissionCardRuns["perm-card-current"] = key
+	adapter.permissionCardRuns["perm-card-old"] = key
+	adapter.runPermissionCardHistory[key] = map[string]struct{}{
+		"perm-card-current": {},
+		"perm-card-old":     {},
+	}
+	adapter.runPermissionActiveRequest[key] = "perm-history-1"
+	adapter.mu.Unlock()
+
+	adapter.updateApprovalStatus("perm-history-1", "allow_once")
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	updatedCurrent := false
+	updatedOld := false
+	for _, message := range msgs {
+		if message.kind != "update_perm_card" || message.resolvedCard == nil || !message.resolvedCard.Approved {
+			continue
+		}
+		if message.chatID == "perm-card-current" && message.resolvedCard.RequestID == "perm-history-1" {
+			updatedCurrent = true
+		}
+		if message.chatID == "perm-card-old" && message.resolvedCard.RequestID == "perm-history-1" {
+			updatedOld = true
+		}
+	}
+	if !updatedCurrent || !updatedOld {
+		t.Fatalf("expected current and historical permission cards finalized, msgs=%#v", msgs)
+	}
+}
+
 func TestRunTerminalFinalizesPermissionCardUsingRunScopedCardFallback(t *testing.T) {
 	adapter := newTestAdapter(t)
 	sessionID := BuildSessionID("chat-terminal-perm")
@@ -1343,6 +1400,11 @@ func TestRunTerminalFinalizesPermissionCardUsingRunScopedCardFallback(t *testing
 	adapter.activeRuns[key] = binding
 	adapter.runPermissionCards[key] = "perm-card-fallback"
 	adapter.permissionCardRuns["perm-card-fallback"] = key
+	adapter.permissionCardRuns["perm-card-stale"] = key
+	adapter.runPermissionCardHistory[key] = map[string]struct{}{
+		"perm-card-fallback": {},
+		"perm-card-stale":    {},
+	}
 	delete(adapter.permissionCards, "perm-terminal-1")
 	delete(adapter.requestRuns, "perm-terminal-1")
 	adapter.mu.Unlock()
@@ -1350,19 +1412,23 @@ func TestRunTerminalFinalizesPermissionCardUsingRunScopedCardFallback(t *testing
 	adapter.markRunTerminal(sessionID, runID, "success", "done", "")
 
 	msgs := adapterTestMessenger(adapter).snapshot()
-	foundResolved := false
+	foundFallbackResolved := false
+	foundStaleResolved := false
 	for _, message := range msgs {
 		if message.kind == "update_perm_card" &&
-			message.chatID == "perm-card-fallback" &&
 			message.resolvedCard != nil &&
 			message.resolvedCard.RequestID == "perm-terminal-1" &&
 			message.resolvedCard.Approved {
-			foundResolved = true
-			break
+			if message.chatID == "perm-card-fallback" {
+				foundFallbackResolved = true
+			}
+			if message.chatID == "perm-card-stale" {
+				foundStaleResolved = true
+			}
 		}
 	}
-	if !foundResolved {
-		t.Fatalf("expected terminal fallback to finalize permission card, msgs=%#v", msgs)
+	if !foundFallbackResolved || !foundStaleResolved {
+		t.Fatalf("expected terminal fallback to finalize current and stale permission cards, msgs=%#v", msgs)
 	}
 }
 
