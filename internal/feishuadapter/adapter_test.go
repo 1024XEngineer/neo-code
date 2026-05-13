@@ -835,7 +835,7 @@ func TestPermissionResolvedEventUpdatesPermissionCard(t *testing.T) {
 		"runtime_event_type": "permission_resolved",
 		"payload": map[string]any{
 			"request_id": "perm-resolve-1",
-			"decision":   "allow_once",
+			"decision":   "allow",
 		},
 	})
 	time.Sleep(40 * time.Millisecond)

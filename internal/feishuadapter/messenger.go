@@ -413,15 +413,20 @@ func buildApprovalRecordsElement(records []ApprovalRecord, pendingCount int) map
 	approvedCount := 0
 	rejectedCount := 0
 	for _, r := range records {
-		switch r.Decision {
-		case "allow_once":
+		switch {
+		case isApprovalApprovedDecision(r.Decision):
 			approvedCount++
-		case "reject":
+		case isApprovalRejectedDecision(r.Decision):
 			rejectedCount++
 		}
 	}
+	totalCount := len(records)
+	processedCount := approvedCount + rejectedCount
 
-	summaryParts := make([]string, 0, 3)
+	summaryParts := make([]string, 0, 4)
+	if totalCount > 0 {
+		summaryParts = append(summaryParts, fmt.Sprintf("%d/%d 已处理", processedCount, totalCount))
+	}
 	if approvedCount > 0 {
 		summaryParts = append(summaryParts, fmt.Sprintf("%d 通过", approvedCount))
 	}
@@ -435,9 +440,10 @@ func buildApprovalRecordsElement(records []ApprovalRecord, pendingCount int) map
 
 	detailLines := make([]string, 0, len(records))
 	for _, r := range records {
-		icon, _ := statusIconAndColor(r.Decision)
+		normalizedDecision := normalizeApprovalDecision(r.Decision)
+		icon, _ := statusIconAndColor(normalizedDecision)
 		label := fallbackStatusField(r.ToolName, "unknown_tool")
-		detailLines = append(detailLines, fmt.Sprintf("%s %s → *%s*", icon, label, r.Decision))
+		detailLines = append(detailLines, fmt.Sprintf("%s %s → *%s*", icon, label, normalizedDecision))
 	}
 	fullText := fmt.Sprintf("**%s**\n%s", summaryText, strings.Join(detailLines, "\n"))
 
@@ -459,7 +465,11 @@ func statusIconAndColor(status string) (string, string) {
 		return "⏳", "yellow"
 	case "approved":
 		return "✅", "green"
+	case "allow_once", "allow_session", "allow":
+		return "✅", "green"
 	case "rejected":
+		return "❌", "red"
+	case "reject", "deny", "denied":
 		return "❌", "red"
 	case "success":
 		return "🎉", "green"

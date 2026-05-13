@@ -720,7 +720,7 @@ func (a *Adapter) markPermissionPending(sessionID string, runID string, requestI
 	}
 	pendingCount := 0
 	for _, entry := range binding.ApprovalRecords {
-		if strings.TrimSpace(strings.ToLower(entry.Decision)) == "pending" {
+		if isApprovalPendingDecision(entry.Decision) {
 			pendingCount++
 		}
 	}
@@ -833,7 +833,7 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 	if normalizedRequestID == "" {
 		return
 	}
-	normalizedDecision := strings.TrimSpace(strings.ToLower(decision))
+	normalizedDecision := normalizeApprovalDecision(decision)
 	if normalizedDecision == "" {
 		return
 	}
@@ -849,7 +849,7 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 				entry := binding.ApprovalRecords[i]
 				resolvedApproval = &entry
 			}
-			if strings.TrimSpace(strings.ToLower(binding.ApprovalRecords[i].Decision)) == "pending" && nextPending == nil {
+			if isApprovalPendingDecision(binding.ApprovalRecords[i].Decision) && nextPending == nil {
 				entry := binding.ApprovalRecords[i]
 				nextPending = &entry
 			}
@@ -858,12 +858,12 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 		rejected := 0
 		pending := 0
 		for _, entry := range binding.ApprovalRecords {
-			switch strings.TrimSpace(strings.ToLower(entry.Decision)) {
-			case "allow_once":
+			switch {
+			case isApprovalApprovedDecision(entry.Decision):
 				approved++
-			case "reject":
+			case isApprovalRejectedDecision(entry.Decision):
 				rejected++
-			case "pending":
+			case isApprovalPendingDecision(entry.Decision):
 				pending++
 			}
 		}
@@ -1009,8 +1009,8 @@ func (a *Adapter) markRunTerminal(sessionID string, runID string, result string,
 		if cardID == "" {
 			continue
 		}
-		decision := strings.TrimSpace(strings.ToLower(entry.Decision))
-		if decision != "allow_once" && decision != "reject" {
+		decision := normalizeApprovalDecision(entry.Decision)
+		if !isApprovalApprovedDecision(decision) && !isApprovalRejectedDecision(decision) {
 			continue
 		}
 		finalizeCards = append(finalizeCards, permissionFinalize{
@@ -1020,7 +1020,7 @@ func (a *Adapter) markRunTerminal(sessionID string, runID string, result string,
 				RequestID: requestID,
 				ToolName:  strings.TrimSpace(entry.ToolName),
 				Message:   strings.TrimSpace(entry.Reason),
-				Approved:  decision == "allow_once",
+				Approved:  isApprovalApprovedDecision(decision),
 			},
 		})
 	}
@@ -1410,6 +1410,42 @@ func extractPermissionResolved(envelope map[string]any) (requestID, decision str
 	requestID = strings.TrimSpace(readString(payload, "request_id"))
 	decision = strings.TrimSpace(strings.ToLower(readString(payload, "decision")))
 	return requestID, decision
+}
+
+// normalizeApprovalDecision 统一审批决议值，兼容 runtime 与卡片动作的不同枚举。
+func normalizeApprovalDecision(decision string) string {
+	switch strings.TrimSpace(strings.ToLower(decision)) {
+	case "allow", "allow_once":
+		return "allow_once"
+	case "allow_session":
+		return "allow_session"
+	case "deny", "denied", "reject", "rejected":
+		return "reject"
+	case "pending":
+		return "pending"
+	default:
+		return strings.TrimSpace(strings.ToLower(decision))
+	}
+}
+
+// isApprovalApprovedDecision 判断审批是否为“通过”态。
+func isApprovalApprovedDecision(decision string) bool {
+	switch normalizeApprovalDecision(decision) {
+	case "allow_once", "allow_session":
+		return true
+	default:
+		return false
+	}
+}
+
+// isApprovalRejectedDecision 判断审批是否为“拒绝”态。
+func isApprovalRejectedDecision(decision string) bool {
+	return normalizeApprovalDecision(decision) == "reject"
+}
+
+// isApprovalPendingDecision 判断审批是否为“等待”态。
+func isApprovalPendingDecision(decision string) bool {
+	return normalizeApprovalDecision(decision) == "pending"
 }
 
 // extractUserQuestionRequest 从 user_question_requested 事件中抽取关键信息。
@@ -1850,12 +1886,13 @@ func (b sessionBinding) statusCardPayload() StatusCardPayload {
 	pendingCount := 0
 	records := make([]ApprovalRecord, 0, len(b.ApprovalRecords))
 	for _, e := range b.ApprovalRecords {
-		if e.Decision == "pending" {
+		normalizedDecision := normalizeApprovalDecision(e.Decision)
+		if isApprovalPendingDecision(normalizedDecision) {
 			pendingCount++
 		}
 		records = append(records, ApprovalRecord{
 			ToolName: e.ToolName,
-			Decision: e.Decision,
+			Decision: normalizedDecision,
 		})
 	}
 	return StatusCardPayload{
