@@ -56,7 +56,11 @@ describe('ChatPanel', () => {
     useChatStore.setState({
       messages: [],
       isGenerating: false,
+      isCompacting: false,
+      compactMode: '',
+      compactMessage: '',
       permissionRequests: [],
+      pendingUserQuestion: null,
       agentMode: 'build',
       permissionMode: 'default',
     } as any)
@@ -241,5 +245,67 @@ describe('ChatPanel', () => {
 
     fireEvent.click(optionADescriptionBtn)
     expect(screen.getByText('先执行方案 A')).toBeInTheDocument()
+  })
+
+  it('shows compact status panel above the normal chat input', () => {
+    useChatStore.setState({
+      isCompacting: true,
+      compactMode: 'proactive',
+      compactMessage: 'Context is near the limit. Auto-compacting...',
+    } as any)
+
+    render(<ChatPanel />)
+
+    expect(screen.getByRole('status')).toHaveTextContent('Context is near the limit. Auto-compacting...')
+    expect(screen.getByTestId('chat-input')).toBeInTheDocument()
+  })
+
+  it('keeps compact status visible while a permission request is shown', () => {
+    useChatStore.setState({
+      isCompacting: true,
+      compactMode: 'reactive',
+      compactMessage: 'Model reported context too long. Compacting and retrying...',
+      permissionRequests: [{
+        request_id: 'req-compact-permission',
+        tool_call_id: 'tool-compact',
+        tool_name: 'filesystem_edit',
+        tool_category: 'filesystem',
+        action_type: 'write',
+        operation: 'edit',
+        target_type: 'file',
+        target: 'foo.txt',
+        decision: '',
+        reason: 'needs approval',
+      }],
+    } as any)
+
+    render(<ChatPanel />)
+
+    expect(screen.getByRole('status')).toHaveTextContent('Model reported context too long. Compacting and retrying...')
+    expect(screen.getByText('权限请求')).toBeInTheDocument()
+    expect(screen.queryByTestId('chat-input')).not.toBeInTheDocument()
+  })
+
+  it('keeps compact status visible while a user question is shown', () => {
+    useChatStore.setState({
+      isCompacting: true,
+      compactMode: 'manual',
+      compactMessage: 'Compacting context...',
+      pendingUserQuestion: {
+        request_id: 'ask-compact',
+        question_id: 'question-compact',
+        title: 'Need input',
+        description: '',
+        kind: 'text',
+        required: true,
+        allow_skip: false,
+      },
+    } as any)
+
+    render(<ChatPanel />)
+
+    expect(screen.getByRole('status')).toHaveTextContent('Compacting context...')
+    expect(screen.getByText('Need input')).toBeInTheDocument()
+    expect(screen.queryByTestId('chat-input')).not.toBeInTheDocument()
   })
 })

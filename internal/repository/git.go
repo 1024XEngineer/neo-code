@@ -441,13 +441,13 @@ func isAmbiguousGitStatusOutsideRepo(workdir string, output string, err error) b
 func hasGitMetadataAncestor(workdir string) bool {
 	current := filepath.Clean(workdir)
 	for {
-		gitPath := filepath.Join(current, ".git")
-		if _, err := os.Stat(gitPath); err == nil {
-			return true
-		}
 		parent := filepath.Dir(current)
 		if parent == current {
 			return false
+		}
+		gitPath := filepath.Join(current, ".git")
+		if _, err := os.Stat(gitPath); err == nil {
+			return true
 		}
 		current = parent
 	}

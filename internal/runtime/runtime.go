@@ -171,6 +171,10 @@ type runtimeSessionTitleUpdater interface {
 	UpdateSessionTitle(ctx context.Context, input agentsession.UpdateSessionTitleInput) error
 }
 
+type runtimeSessionDeleter interface {
+	DeleteSession(ctx context.Context, sessionID string) error
+}
+
 type Service struct {
 	configManager     *config.Manager
 	sessionStore      agentsession.Store
@@ -469,6 +473,136 @@ func (s *Service) CreateSession(ctx context.Context, id string) (agentsession.Se
 		return s.LoadSession(ctx, sessionID)
 	}
 	return agentsession.Session{}, createErr
+}
+
+// SupportsSessionMutationBoundary 标记 runtime 已为会话管理写入口提供统一锁边界。
+func (s *Service) SupportsSessionMutationBoundary() bool {
+	return true
+}
+
+// DeleteSession 在 runtime 会话锁内删除指定会话，避免运行中管理操作绕过主链路写保护。
+func (s *Service) DeleteSession(ctx context.Context, sessionID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	if normalizedSessionID == "" {
+		return agentsession.ErrSessionNotFound
+	}
+	deleter, ok := s.sessionStore.(runtimeSessionDeleter)
+	if !ok {
+		return errors.New("runtime: session store does not support delete")
+	}
+
+	sessionMu, releaseLockRef := s.acquireSessionLock(normalizedSessionID)
+	sessionMu.Lock()
+	defer func() {
+		sessionMu.Unlock()
+		releaseLockRef()
+	}()
+	if err := deleter.DeleteSession(ctx, normalizedSessionID); err != nil {
+		return err
+	}
+	s.runtimeSnapshotMu.Lock()
+	delete(s.runtimeSnapshots, normalizedSessionID)
+	s.runtimeSnapshotMu.Unlock()
+	return nil
+}
+
+// RenameSession 在 runtime 会话锁内更新标题，避免 UI 管理写入与运行态持久化竞争。
+func (s *Service) RenameSession(ctx context.Context, sessionID string, title string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	normalizedTitle := strings.TrimSpace(title)
+	if normalizedSessionID == "" {
+		return agentsession.ErrSessionNotFound
+	}
+	if normalizedTitle == "" {
+		return errors.New("runtime: session title is empty")
+	}
+
+	sessionMu, releaseLockRef := s.acquireSessionLock(normalizedSessionID)
+	sessionMu.Lock()
+	defer func() {
+		sessionMu.Unlock()
+		releaseLockRef()
+	}()
+	if titleUpdater, ok := s.sessionStore.(runtimeSessionTitleUpdater); ok {
+		return titleUpdater.UpdateSessionTitle(ctx, agentsession.UpdateSessionTitleInput{
+			SessionID: normalizedSessionID,
+			UpdatedAt: time.Now().UTC(),
+			Title:     normalizedTitle,
+		})
+	}
+	session, err := s.sessionStore.LoadSession(ctx, normalizedSessionID)
+	if err != nil {
+		return err
+	}
+	session.Title = normalizedTitle
+	session.UpdatedAt = time.Now().UTC()
+	return s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(session))
+}
+
+// UpdateSessionModel 在 runtime 会话锁内切换会话 provider/model 元数据。
+func (s *Service) UpdateSessionModel(ctx context.Context, sessionID string, providerID string, modelID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	providerID = strings.TrimSpace(providerID)
+	modelID = strings.TrimSpace(modelID)
+	if normalizedSessionID == "" {
+		return agentsession.ErrSessionNotFound
+	}
+	if providerID == "" || modelID == "" {
+		return errors.New("runtime: session provider/model is empty")
+	}
+
+	sessionMu, releaseLockRef := s.acquireSessionLock(normalizedSessionID)
+	sessionMu.Lock()
+	defer func() {
+		sessionMu.Unlock()
+		releaseLockRef()
+	}()
+	session, err := s.sessionStore.LoadSession(ctx, normalizedSessionID)
+	if err != nil {
+		return err
+	}
+	session.Provider = providerID
+	session.Model = modelID
+	session.UpdatedAt = time.Now().UTC()
+	return s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(session))
+}
+
+// SyncSessionsProviderModel 在 runtime 会话锁内批量同步当前工作区会话的 provider/model。
+func (s *Service) SyncSessionsProviderModel(ctx context.Context, providerID string, modelID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	providerID = strings.TrimSpace(providerID)
+	modelID = strings.TrimSpace(modelID)
+	if providerID == "" || modelID == "" {
+		return nil
+	}
+	summaries, err := s.sessionStore.ListSummaries(ctx)
+	if err != nil {
+		return err
+	}
+	for _, summary := range summaries {
+		sessionID := strings.TrimSpace(summary.ID)
+		if sessionID == "" {
+			continue
+		}
+		if err := s.UpdateSessionModel(ctx, sessionID, providerID, modelID); err != nil {
+			if errors.Is(err, agentsession.ErrSessionNotFound) {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
 }
 
 // isRuntimeSessionNotFoundError 判断错误是否代表会话文件/记录不存在。

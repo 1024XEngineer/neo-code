@@ -99,6 +99,7 @@ export default defineConfig({
                 { text: "HTTP URL 唤醒指南", link: "/guide/http-daemon-wake-user-guide" },
                 { text: "配置指南", link: "/guide/configuration" },
                 { text: "工具与权限", link: "/guide/tools-permissions" },
+                { text: "终端代理与诊断", link: "/guide/shell-diag" },
               ],
             },
             {
@@ -108,6 +109,7 @@ export default defineConfig({
                 { text: "Skills 使用", link: "/guide/skills" },
                 { text: "飞书远程接入配置", link: "/guide/feishu-remote-setup" },
                 { text: "Hooks 使用", link: "/guide/hooks" },
+                { text: "Clawd 桌宠接入示例", link: "/guide/hooks-clawd-integration" },
               ],
             },
             {
@@ -196,6 +198,7 @@ export default defineConfig({
                 { text: "Daily Use", link: "/en/guide/daily-use" },
                 { text: "Configuration", link: "/en/guide/configuration" },
                 { text: "Tools & Permissions", link: "/en/guide/tools-permissions" },
+                { text: "Shell Proxy & Diagnosis", link: "/en/guide/shell-diag" },
               ],
             },
             {
@@ -203,6 +206,8 @@ export default defineConfig({
               items: [
                 { text: "MCP Tools", link: "/en/guide/mcp" },
                 { text: "Skills", link: "/en/guide/skills" },
+                { text: "Hooks", link: "/en/guide/hooks" },
+                { text: "NeoCode x Clawd", link: "/en/guide/hooks-clawd-integration" },
               ],
             },
             {

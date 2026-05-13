@@ -1156,11 +1156,18 @@ html, body, #root {
 .input-box.compacting {
   border-color: var(--warning-muted);
 }
-.compact-status-row {
+.compact-status-panel {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px 0;
+  flex-shrink: 0;
+  max-width: 740px;
+  width: calc(100% - var(--space-12));
+  margin: 0 auto var(--space-2);
+  padding: 8px 12px;
+  border: 1px solid var(--warning-muted);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
   color: var(--warning);
   font-size: 12px;
   font-weight: 500;
@@ -1468,13 +1475,29 @@ html, body, #root {
 .config-card-info { flex: 1; min-width: 0; }
 .config-card-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .config-card-meta { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.config-card-models { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.config-card-models {
+  display: flex;
+  gap: 4px;
+  flex-wrap: nowrap;
+  margin-top: 4px;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.config-card-models::-webkit-scrollbar { height: 4px; }
+.config-card-models::-webkit-scrollbar-thumb {
+  background: var(--bg-active);
+  border-radius: var(--radius-full);
+}
 .config-card-model-tag {
   font-size: 10px; padding: 1px 6px;
   border-radius: var(--radius-sm);
   background: var(--bg-active);
   color: var(--text-secondary);
   font-family: var(--font-mono);
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 /* ── Provider Card (in modals) ── */

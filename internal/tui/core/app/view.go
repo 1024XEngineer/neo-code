@@ -100,9 +100,8 @@ func (a App) renderHeader(width int) string {
 	status := compactStatusText(a.state.StatusText, max(18, width/3))
 	if a.state.IsAgentRunning {
 		if a.runProgressKnown {
-			progressLabel := tuiutils.Fallback(strings.TrimSpace(a.runProgressLabel), tuiutils.Fallback(status, statusRunning))
-			percent := int(a.runProgressValue*100 + 0.5)
-			status = fmt.Sprintf("%d%% %s", percent, progressLabel)
+			phaseLabel := tuiutils.Fallback(strings.TrimSpace(a.runProgressLabel), tuiutils.Fallback(status, statusRunning))
+			status = a.spinner.View() + " " + phaseLabel
 		} else if status != statusThinking {
 			status = tuiutils.Fallback(status, statusRunning)
 		}

@@ -160,7 +160,9 @@ export async function loadSessionWithInsights(gatewayAPI: GatewayAPI, sessionId:
 /** isInternalHistoryMessage 识别仅供 runtime/provider 续跑使用、不能回放到 Web 聊天流的内部控制消息。 */
 function isInternalHistoryMessage(msg: BackendMessage): boolean {
   const role = msg.role.trim().toLowerCase()
-  if (role !== 'system' && role !== 'assistant') return false
+  // 所有 system 角色消息仅供模型内部使用，不展示给用户
+  if (role === 'system') return true
+  if (role !== 'assistant') return false
 
   const content = msg.content.trim()
   if (!content) return false

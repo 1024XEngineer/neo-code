@@ -538,6 +538,34 @@ function strField(payload: unknown, key: string): string {
   return ((payload as PayloadRecord)?.[key] as string) ?? "";
 }
 
+function resolveCompactMode(payload: unknown): string {
+  if (typeof payload === "string") return payload.trim() || "manual";
+  return (
+    strField(payload, "trigger_mode") ||
+    strField(payload, "TriggerMode") ||
+    "manual"
+  );
+}
+
+function compactMessageForMode(mode: string): string {
+  switch (mode) {
+    case "proactive":
+      return "Context is near the limit. Auto-compacting...";
+    case "reactive":
+      return "Model reported context too long. Compacting and retrying...";
+    case "manual":
+    default:
+      return "Compacting context...";
+  }
+}
+
+function compactErrorMessageForMode(mode: string, message: string): string {
+  if (mode === "proactive" || mode === "reactive") {
+    return message ? `Auto context compaction failed: ${message}` : "Auto context compaction failed";
+  }
+  return message || "Compaction failed";
+}
+
 /** 从 tool_result 事件中解析最终工具调用 ID，兼容字段名差异。 */
 function resolveToolResultCallID(eventPayload: unknown): string {
   return (
@@ -851,33 +879,30 @@ export function handleGatewayEvent(
       break;
 
     case EventType.CompactStart: {
-      const mode =
-        typeof eventPayload === "string"
-          ? eventPayload
-          : strField(eventPayload, "trigger_mode") ||
-            strField(eventPayload, "TriggerMode") ||
-            "manual";
+      const mode = resolveCompactMode(eventPayload);
       useChatStore
         .getState()
-        .startCompacting(mode, "Compacting context...");
+        .startCompacting(mode, compactMessageForMode(mode));
       break;
     }
 
     case EventType.CompactApplied: {
+      const mode = resolveCompactMode(eventPayload);
       useChatStore.getState().finishCompacting();
-      uiStore.showToast("Context compacted", "success");
+      if (mode === "manual") {
+        uiStore.showToast("Context compacted", "success");
+      }
       break;
     }
 
     case EventType.CompactError: {
-      useChatStore.getState().finishCompacting();
-      uiStore.showToast(
+      const mode = resolveCompactMode(eventPayload);
+      const message =
         strField(eventPayload, "message") ||
-          strField(eventPayload, "Message") ||
-          (typeof eventPayload === "string" ? eventPayload : "") ||
-          "Compaction failed",
-        "error",
-      );
+        strField(eventPayload, "Message") ||
+        (typeof eventPayload === "string" ? eventPayload : "");
+      useChatStore.getState().finishCompacting();
+      uiStore.showToast(compactErrorMessageForMode(mode, message), "error");
       break;
     }
 
@@ -957,9 +982,13 @@ export function handleGatewayEvent(
       const payload = eventPayload as TodoEventPayload | undefined;
       if (payload) insightStore.setTodoConflict(payload);
       const reason = strField(eventPayload, "reason");
-      // revision_conflict 是可恢复冲突，仅在面板显示，不弹全局 toast;
+      // revision_conflict 与 invalid_transition 是可恢复冲突，仅在面板显示，不弹全局 toast;
       // 其余冲突降级为 info 避免打断聊天体验。
-      if (reason && reason !== "revision_conflict") {
+      if (
+        reason &&
+        reason !== "revision_conflict" &&
+        reason !== "invalid_transition"
+      ) {
         uiStore.showToast(`Todo conflict: ${reason}`, "info");
       }
       break;
