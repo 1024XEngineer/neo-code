@@ -167,6 +167,9 @@ export default function Sidebar({ collapsed }: SidebarProps) {
         <button className="sidebar-strip-btn" onClick={() => setProviderModalOpen(true)} title="供应商">
           <Server size={16} />
         </button>
+        {mcpModalOpen && <McpModal onClose={() => setMcpModalOpen(false)} />}
+        {skillModalOpen && <SkillModal onClose={() => setSkillModalOpen(false)} />}
+        {providerModalOpen && <ProviderModal onClose={() => setProviderModalOpen(false)} />}
       </>
     )
   }

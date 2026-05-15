@@ -23,6 +23,43 @@ describe('Sidebar ProviderModal', () => {
   beforeEach(() => {
     cleanup()
     mockGatewayAPI = {
+      listMCPServers: vi.fn().mockResolvedValue({
+        payload: {
+          servers: [
+            {
+              id: 'stdio-weather',
+              enabled: true,
+              trust: false,
+              transport: 'stdio',
+              stdio: { command: 'weather', args: [], env: [] },
+            },
+          ],
+        },
+      }),
+      setMCPServerEnabled: vi.fn().mockResolvedValue(undefined),
+      deleteMCPServer: vi.fn().mockResolvedValue(undefined),
+      upsertMCPServer: vi.fn().mockResolvedValue(undefined),
+      listAvailableSkills: vi.fn().mockResolvedValue({
+        payload: {
+          skills: [
+            {
+              descriptor: {
+                id: 'skill-refactor',
+                name: 'Skill Refactor',
+                description: 'Refactor code safely',
+              },
+              active: false,
+            },
+          ],
+        },
+      }),
+      listSessionSkills: vi.fn().mockResolvedValue({
+        payload: {
+          skills: [],
+        },
+      }),
+      activateSessionSkill: vi.fn().mockResolvedValue(undefined),
+      deactivateSessionSkill: vi.fn().mockResolvedValue(undefined),
       listProviders: vi.fn().mockResolvedValue({
         payload: {
           providers: [
@@ -289,5 +326,54 @@ describe('Sidebar ProviderModal', () => {
       expect(chevronFor(workspaceOne)).not.toHaveClass('expanded')
       expect(chevronFor(workspaceTwo)).toHaveClass('expanded')
     })
+  })
+
+  it('immediately dispatches collapsed-rail actions', async () => {
+    const toggleSidebar = vi.fn()
+    const prepareNewChat = vi.fn()
+    useUIStore.setState({
+      toggleSidebar,
+    } as any)
+    useSessionStore.setState({
+      prepareNewChat,
+    } as any)
+
+    const { container } = render(<Sidebar collapsed />)
+    const collapsedButtons = Array.from(container.querySelectorAll('.sidebar-strip-btn'))
+
+    expect(collapsedButtons).toHaveLength(5)
+
+    fireEvent.click(collapsedButtons[0] as HTMLButtonElement)
+    expect(toggleSidebar).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(collapsedButtons[1] as HTMLButtonElement)
+    expect(prepareNewChat).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(collapsedButtons[2] as HTMLButtonElement)
+    await waitFor(() => {
+      expect(mockGatewayAPI.listMCPServers).toHaveBeenCalled()
+    })
+
+    fireEvent.click(collapsedButtons[3] as HTMLButtonElement)
+    await waitFor(() => {
+      expect(mockGatewayAPI.listAvailableSkills).toHaveBeenCalled()
+      expect(screen.getByText('Skill Refactor')).toBeInTheDocument()
+    })
+
+    fireEvent.click(collapsedButtons[4] as HTMLButtonElement)
+    await waitFor(() => {
+      expect(mockGatewayAPI.listProviders).toHaveBeenCalled()
+      expect(screen.getByText('Gemini')).toBeInTheDocument()
+    })
+  })
+
+  it('keeps the collapsed rail style above neighboring panels', () => {
+    const railRule = appCss.match(/\.sidebar-collapsed-wrapper\s*{(?<body>[^}]*)}/)?.groups?.body ?? ''
+    expect(railRule).toContain('position: relative')
+    expect(railRule).toContain('z-index: 20')
+    expect(railRule).toContain('isolation: isolate')
+    expect(railRule).toContain('width: 44px')
+    expect(railRule).toContain('min-width: 44px')
+    expect(railRule).toContain('flex: 0 0 44px')
   })
 })

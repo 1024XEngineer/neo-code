@@ -91,7 +91,7 @@ export default function AppLayout({ shellMode = 'electron' }: AppLayoutProps) {
             />
           </div>
         ) : (
-          <div className="sidebar-collapsed-wrapper">
+          <div className="sidebar-collapsed-wrapper" data-testid="sidebar-collapsed-rail">
             <Sidebar collapsed />
           </div>
         )}
