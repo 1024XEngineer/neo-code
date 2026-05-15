@@ -5,7 +5,13 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 
-vi.mock('./Sidebar', () => ({ default: ({ collapsed }: { collapsed?: boolean }) => <div>{collapsed ? 'sidebar-collapsed' : 'sidebar-open'}</div> }))
+vi.mock('./Sidebar', () => ({
+	default: ({ collapsed }: { collapsed?: boolean }) => (
+		<div data-testid={collapsed ? 'sidebar-collapsed-content' : 'sidebar-open-content'}>
+			{collapsed ? 'sidebar-collapsed' : 'sidebar-open'}
+		</div>
+	),
+}))
 vi.mock('@/components/chat/ChatPanel', () => ({ default: () => <div>chat-panel</div> }))
 vi.mock('@/components/panels/FileChangePanel', () => ({ default: () => <div>changes-panel</div> }))
 vi.mock('@/components/panels/FileTreePanel', () => ({ default: () => <div>tree-panel</div> }))
@@ -47,6 +53,23 @@ describe('AppLayout', () => {
 		expect(screen.getByText('sidebar-collapsed')).toBeInTheDocument()
 		expect(screen.getByText('changes-panel')).toBeInTheDocument()
 		expect(screen.getByText('tree-panel')).toBeInTheDocument()
+	})
+
+	it('renders collapsed sidebar in a dedicated rail beside the main area', () => {
+		useUIStore.setState({
+			sidebarOpen: false,
+		} as any)
+		render(<AppLayout />)
+
+		const workspace = document.querySelector('.app-workspace')
+		const rail = screen.getByTestId('sidebar-collapsed-rail')
+		const collapsedContent = screen.getByTestId('sidebar-collapsed-content')
+		const mainArea = document.querySelector('.main-area')
+
+		expect(workspace).toContainElement(rail)
+		expect(rail).toContainElement(collapsedContent)
+		expect(mainArea?.parentElement).toBe(workspace)
+		expect(collapsedContent.closest('.main-area')).toBeNull()
 	})
 
 	it('handles ctrl/cmd+n shortcut', () => {

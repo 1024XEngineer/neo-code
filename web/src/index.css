@@ -512,6 +512,8 @@ html, body, #root {
   flex-direction: column;
   overflow: hidden;
   background: var(--bg-app);
+  position: relative;
+  z-index: 0;
 }
 
 /* ── Chat Header ── */
@@ -1750,6 +1752,8 @@ html, body, #root {
   background: var(--bg-sidebar);
   border-left: none;
   overflow: hidden;
+  position: relative;
+  z-index: 0;
 }
 
 .git-diff-preview-host-inline .monaco-editor .inline-deleted-margin-view-zone {
@@ -1770,7 +1774,13 @@ html, body, #root {
 
 /* ── Collapsed Sidebar Wrapper (used from AppLayout) ── */
 .sidebar-collapsed-wrapper {
-  width: 44px; flex-shrink: 0;
+  position: relative;
+  z-index: 20;
+  isolation: isolate;
+  width: 44px;
+  min-width: 44px;
+  flex: 0 0 44px;
+  align-self: stretch;
   background: var(--bg-sidebar);
   display: flex; flex-direction: column;
   align-items: center;
