@@ -402,7 +402,7 @@ func buildUserCommandHookHandler(params map[string]any, defaultWorkdir string) (
 			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass, Message: message}
 		}
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
+		if errors.As(err, &exitErr) && (exitErr.ExitCode() == 1 || exitErr.ExitCode() == 2) {
 			return runtimehooks.HookResult{Status: runtimehooks.HookResultBlock, Message: message}
 		}
 		detail := strings.TrimSpace(message)

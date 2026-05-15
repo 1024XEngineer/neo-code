@@ -409,6 +409,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 						if s.handleAcceptanceContinue(ctx, &state, report) {
 							break turnAttempt
 						}
+						if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
+							return s.handleRunError(err)
+						}
 						s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 						return nil
 					}
@@ -439,6 +442,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				if report.Outcome == acceptgate.OutcomeContinue {
 					if s.handleAcceptanceContinue(ctx, &state, report) {
 						break turnAttempt
+					}
+					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
+						return s.handleRunError(err)
 					}
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					return nil
