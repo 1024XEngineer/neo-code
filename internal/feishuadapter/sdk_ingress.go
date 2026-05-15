@@ -55,11 +55,13 @@ func NewSDKIngress(cfg Config, logger func(string, ...any)) Ingress {
 
 // Run 建立 SDK 长连接并将接收到的事件转发到统一 handler。
 func (s *SDKIngress) Run(ctx context.Context, handler IngressHandler) error {
+	s.logger("feishu sdk ingress starting app_id=%s", strings.TrimSpace(s.cfg.AppID))
 	client := newSDKEventClient(s.cfg, handler)
 	if client == nil {
 		return fmt.Errorf("create sdk event client: nil client")
 	}
 	err := client.Start(ctx)
+	s.logger("feishu sdk ingress stopped err=%v", err)
 	if err != nil && err != context.Canceled {
 		s.logger("feishu sdk ingress stopped with error: %v", err)
 	}
@@ -107,8 +109,10 @@ func mapSDKCardActionEvent(event *larkevent.EventReq) (FeishuCardActionEvent, bo
 		Header struct {
 			EventID string `json:"event_id"`
 		} `json:"header"`
-		Event struct {
-			Action struct {
+		OpenMessageID string `json:"open_message_id"`
+		Event         struct {
+			OpenMessageID string `json:"open_message_id"`
+			Action        struct {
 				Value map[string]string `json:"value"`
 			} `json:"action"`
 		} `json:"event"`
@@ -118,7 +122,7 @@ func mapSDKCardActionEvent(event *larkevent.EventReq) (FeishuCardActionEvent, bo
 	}
 	actionType := strings.TrimSpace(strings.ToLower(payload.Event.Action.Value["action_type"]))
 	requestID := strings.TrimSpace(payload.Event.Action.Value["request_id"])
-	decision := strings.TrimSpace(strings.ToLower(payload.Event.Action.Value["decision"]))
+	decision := normalizeApprovalDecision(payload.Event.Action.Value["decision"])
 	status := strings.TrimSpace(strings.ToLower(payload.Event.Action.Value["status"]))
 	value := strings.TrimSpace(payload.Event.Action.Value["value"])
 	message := strings.TrimSpace(payload.Event.Action.Value["message"])
@@ -132,7 +136,7 @@ func mapSDKCardActionEvent(event *larkevent.EventReq) (FeishuCardActionEvent, bo
 	if requestID == "" {
 		return FeishuCardActionEvent{}, false
 	}
-	if actionType == "permission" && decision != "allow_once" && decision != "reject" {
+	if actionType == "permission" && !isApprovalApprovedDecision(decision) && !isApprovalRejectedDecision(decision) {
 		return FeishuCardActionEvent{}, false
 	}
 	if actionType == "user_question" && status != "answered" && status != "skipped" {
@@ -140,6 +144,7 @@ func mapSDKCardActionEvent(event *larkevent.EventReq) (FeishuCardActionEvent, bo
 	}
 	cardEvent := FeishuCardActionEvent{
 		EventID:    strings.TrimSpace(payload.Header.EventID),
+		CardID:     firstNonEmpty(strings.TrimSpace(payload.Event.OpenMessageID), strings.TrimSpace(payload.OpenMessageID)),
 		ActionType: actionType,
 		RequestID:  requestID,
 		Decision:   decision,

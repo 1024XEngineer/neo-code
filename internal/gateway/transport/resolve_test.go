@@ -1,14 +1,24 @@
 package transport
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 func TestResolveListenAddressUsesOverride(t *testing.T) {
-	address, err := ResolveListenAddress("  custom-address  ")
+	override := "custom-address"
+	want := "custom-address"
+	if runtime.GOOS == "windows" {
+		override = `\\.\pipe\custom-address`
+		want = `\\.\pipe\custom-address`
+	}
+
+	address, err := ResolveListenAddress("  " + override + "  ")
 	if err != nil {
 		t.Fatalf("resolve listen address: %v", err)
 	}
-	if address != "custom-address" {
-		t.Fatalf("resolved address = %q, want %q", address, "custom-address")
+	if address != want {
+		t.Fatalf("resolved address = %q, want %q", address, want)
 	}
 }
 

@@ -135,7 +135,7 @@ func TestHandleMessageSDKPrivateChatTriggersRun(t *testing.T) {
 	}
 }
 
-func TestHandleMessageSDKGroupOnlyBotMentionTriggersRun(t *testing.T) {
+func TestHandleMessageSDKGroupMessageTriggersRun(t *testing.T) {
 	adapter := newTestAdapter(t)
 	adapter.cfg.IngressMode = IngressModeSDK
 	err := adapter.HandleMessage(context.Background(), FeishuMessageEvent{
@@ -152,8 +152,8 @@ func TestHandleMessageSDKGroupOnlyBotMentionTriggersRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handle non-bot mention: %v", err)
 	}
-	if adapterTestGateway(adapter).runCount != 0 {
-		t.Fatalf("run count = %d, want 0", adapterTestGateway(adapter).runCount)
+	if adapterTestGateway(adapter).runCount != 1 {
+		t.Fatalf("run count = %d, want 1", adapterTestGateway(adapter).runCount)
 	}
 
 	err = adapter.HandleMessage(context.Background(), FeishuMessageEvent{
@@ -170,8 +170,8 @@ func TestHandleMessageSDKGroupOnlyBotMentionTriggersRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handle bot mention: %v", err)
 	}
-	if adapterTestGateway(adapter).runCount != 1 {
-		t.Fatalf("run count = %d, want 1", adapterTestGateway(adapter).runCount)
+	if adapterTestGateway(adapter).runCount != 2 {
+		t.Fatalf("run count = %d, want 2", adapterTestGateway(adapter).runCount)
 	}
 }
 
@@ -332,6 +332,30 @@ func TestMapSDKCardActionEventSuccessAndExtractSDKMessageTextFallback(t *testing
 	}
 	if text := extractSDKMessageText("plain text"); text != "plain text" {
 		t.Fatalf("fallback sdk text = %q", text)
+	}
+}
+
+func TestMapSDKCardActionEventNormalizesAllowAndDenyDecision(t *testing.T) {
+	allowEvent, ok := mapSDKCardActionEvent(&larkevent.EventReq{Body: []byte(`{
+		"header":{"event_id":"evt-card-allow"},
+		"event":{"action":{"value":{"request_id":"perm-allow","decision":"ALLOW"}}}
+	}`)})
+	if !ok {
+		t.Fatal("expected allow decision to parse")
+	}
+	if allowEvent.Decision != "allow_once" {
+		t.Fatalf("allow decision normalized = %q, want allow_once", allowEvent.Decision)
+	}
+
+	denyEvent, ok := mapSDKCardActionEvent(&larkevent.EventReq{Body: []byte(`{
+		"header":{"event_id":"evt-card-deny"},
+		"event":{"action":{"value":{"request_id":"perm-deny","decision":"DENIED"}}}
+	}`)})
+	if !ok {
+		t.Fatal("expected denied decision to parse")
+	}
+	if denyEvent.Decision != "reject" {
+		t.Fatalf("deny decision normalized = %q, want reject", denyEvent.Decision)
 	}
 }
 

@@ -60,6 +60,19 @@ func (c *gatewayRPCClient) Run(ctx context.Context, sessionID string, runID stri
 	}, &result)
 }
 
+// CancelRun 取消指定会话中的运行任务。
+func (c *gatewayRPCClient) CancelRun(ctx context.Context, sessionID string, runID string) (bool, error) {
+	var result map[string]any
+	if err := c.client.Call(ctx, protocol.MethodGatewayCancel, protocol.CancelParams{
+		SessionID: sessionID,
+		RunID:     runID,
+	}, &result); err != nil {
+		return false, err
+	}
+	canceled, _ := result["canceled"].(bool)
+	return canceled, nil
+}
+
 // ResolvePermission 提交一次审批决策。
 func (c *gatewayRPCClient) ResolvePermission(ctx context.Context, requestID string, decision string) error {
 	var result map[string]any

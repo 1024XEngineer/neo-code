@@ -24,13 +24,17 @@ type fakeGatewayClient struct {
 	notifications chan GatewayNotification
 	runCount      int
 	resolveCount  int
+	cancelCount   int
 	authCount     int
 	pingErr       error
 	authErr       error
 	bindErr       error
 	resolveErr    error
+	cancelErr     error
 	runErr        error
 	runErrOnce    bool
+	cancelResult  bool
+	resolveHook   func(requestID string, decision string) error
 }
 
 func newFakeGatewayClient() *fakeGatewayClient {
@@ -62,11 +66,24 @@ func (f *fakeGatewayClient) Run(_ context.Context, sessionID string, runID strin
 	f.mu.Unlock()
 	return runErr
 }
+func (f *fakeGatewayClient) CancelRun(_ context.Context, sessionID string, runID string) (bool, error) {
+	f.record("cancel:" + sessionID + ":" + runID)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cancelCount++
+	if f.cancelErr != nil {
+		return false, f.cancelErr
+	}
+	return f.cancelResult, nil
+}
 func (f *fakeGatewayClient) ResolvePermission(_ context.Context, requestID string, decision string) error {
 	f.record("resolve:" + requestID + ":" + decision)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resolveCount++
+	if f.resolveHook != nil {
+		return f.resolveHook(requestID, decision)
+	}
 	return f.resolveErr
 }
 func (f *fakeGatewayClient) ResolveUserQuestion(
@@ -111,6 +128,7 @@ type sentMessage struct {
 	kind                 string
 	text                 string
 	card                 PermissionCardPayload
+	updatedPendingCard   *PermissionCardPayload
 	userQuestionCard     UserQuestionCardPayload
 	runCard              StatusCardPayload
 	cardID               string
@@ -148,6 +166,13 @@ func (m *fakeMessenger) UpdatePermissionCard(_ context.Context, cardID string, p
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.messages = append(m.messages, sentMessage{chatID: cardID, kind: "update_perm_card", resolvedCard: &payload})
+	return nil
+}
+
+func (m *fakeMessenger) UpdatePendingPermissionCard(_ context.Context, cardID string, payload PermissionCardPayload) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messages = append(m.messages, sentMessage{chatID: cardID, kind: "update_pending_perm_card", updatedPendingCard: &payload})
 	return nil
 }
 
@@ -381,7 +406,7 @@ func TestRunFailureCleansTrackedRunBinding(t *testing.T) {
 	}
 }
 
-func TestGroupMessageWithoutMentionIgnored(t *testing.T) {
+func TestGroupMessageWithoutMentionAccepted(t *testing.T) {
 	adapter := newTestAdapter(t)
 	body := messageEventBodyWithChatType("evt-group", "msg-group", "chat-group", "hello group", "group")
 	request := signedRequest(t, adapter.cfg.SigningSecret, body)
@@ -390,8 +415,8 @@ func TestGroupMessageWithoutMentionIgnored(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", recorder.Code)
 	}
-	if adapterTestGateway(adapter).runCount != 0 {
-		t.Fatalf("run count = %d, want 0", adapterTestGateway(adapter).runCount)
+	if adapterTestGateway(adapter).runCount != 1 {
+		t.Fatalf("run count = %d, want 1", adapterTestGateway(adapter).runCount)
 	}
 }
 
@@ -434,7 +459,7 @@ func TestGroupMessageWithMentionAccepted(t *testing.T) {
 	}
 }
 
-func TestGroupMessageWithNonBotMentionIgnored(t *testing.T) {
+func TestGroupMessageWithNonBotMentionAccepted(t *testing.T) {
 	adapter := newTestAdapter(t)
 	content, _ := json.Marshal(map[string]string{"text": "<at user_id=\"ou_other\">alice</at> hi"})
 	payload := map[string]any{
@@ -468,8 +493,8 @@ func TestGroupMessageWithNonBotMentionIgnored(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", recorder.Code)
 	}
-	if adapterTestGateway(adapter).runCount != 0 {
-		t.Fatalf("run count = %d, want 0", adapterTestGateway(adapter).runCount)
+	if adapterTestGateway(adapter).runCount != 1 {
+		t.Fatalf("run count = %d, want 1", adapterTestGateway(adapter).runCount)
 	}
 }
 
@@ -678,7 +703,7 @@ func TestGatewayEventsUpdateStatusCard(t *testing.T) {
 	}
 }
 
-func TestPermissionApprovalDoesNotRevertToPendingAndDismissesCard(t *testing.T) {
+func TestPermissionApprovalDoesNotRevertToPendingAndKeepsResolvedCard(t *testing.T) {
 	adapter := newTestAdapter(t)
 	adapter.permissionCardDismissDelay = 5 * time.Millisecond
 	if err := adapter.bindThenRun(context.Background(), "session-approval", "run-approval", "chat-approval", "执行审批任务"); err != nil {
@@ -742,11 +767,668 @@ func TestPermissionApprovalDoesNotRevertToPendingAndDismissesCard(t *testing.T) 
 	if !updatedResolved {
 		t.Fatalf("expected resolved permission card update, msgs=%#v", msgs)
 	}
-	if !deletedResolvedCard {
-		t.Fatalf("expected resolved permission card deletion, msgs=%#v", msgs)
+	if deletedResolvedCard {
+		t.Fatalf("resolved permission card should stay visible in queue mode, msgs=%#v", msgs)
 	}
 	if lastApprovalStatus != "approved" {
 		t.Fatalf("last approval status = %q, want approved; msgs=%#v", lastApprovalStatus, msgs)
+	}
+}
+
+func TestPermissionApprovalsDoNotAutoPushQueuedCardOnResolve(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if err := adapter.bindThenRun(context.Background(), "session-queue", "run-queue", "chat-queue", "执行审批队列任务"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-queue", "run-queue", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-queue-1",
+			"reason":     "审批一",
+		},
+	})
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-queue", "run-queue", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-queue-2",
+			"reason":     "审批二",
+		},
+	})
+	time.Sleep(40 * time.Millisecond)
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	cardSendBeforeResolve := 0
+	for _, message := range msgs {
+		if message.kind == "card" {
+			cardSendBeforeResolve++
+		}
+	}
+	if cardSendBeforeResolve != 1 {
+		t.Fatalf("permission cards before resolve = %d, want 1; msgs=%#v", cardSendBeforeResolve, msgs)
+	}
+
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		RequestID: "perm-queue-1",
+		Decision:  "allow_once",
+	}); err != nil {
+		t.Fatalf("handle first card action: %v", err)
+	}
+	time.Sleep(40 * time.Millisecond)
+
+	msgs = adapterTestMessenger(adapter).snapshot()
+	totalCardSend := 0
+	resolvedUpdates := 0
+	pendingUpdates := 0
+	for _, message := range msgs {
+		if message.kind == "card" {
+			totalCardSend++
+		}
+		if message.kind == "update_perm_card" && message.resolvedCard != nil &&
+			message.resolvedCard.RequestID == "perm-queue-1" {
+			resolvedUpdates++
+		}
+		if message.kind == "update_pending_perm_card" && message.updatedPendingCard != nil &&
+			message.updatedPendingCard.RequestID == "perm-queue-2" {
+			pendingUpdates++
+		}
+	}
+	if totalCardSend != 1 {
+		t.Fatalf("permission cards total after first resolve = %d, want 1; msgs=%#v", totalCardSend, msgs)
+	}
+	if resolvedUpdates == 0 {
+		t.Fatalf("expected resolved state visible before switching to next pending, msgs=%#v", msgs)
+	}
+	if pendingUpdates == 0 {
+		t.Fatalf("expected pending card remains focused on newer request, msgs=%#v", msgs)
+	}
+}
+
+func TestPermissionCardReusedAcrossSequentialRequests(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if err := adapter.bindThenRun(context.Background(), "session-reuse", "run-reuse", "chat-reuse", "执行审批复用任务"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-reuse", "run-reuse", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-reuse-1",
+			"reason":     "审批一",
+		},
+	})
+	time.Sleep(30 * time.Millisecond)
+
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		RequestID: "perm-reuse-1",
+		Decision:  "allow_once",
+	}); err != nil {
+		t.Fatalf("handle first card action: %v", err)
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-reuse", "run-reuse", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-reuse-2",
+			"reason":     "审批二",
+		},
+	})
+	time.Sleep(40 * time.Millisecond)
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	cardSends := 0
+	pendingUpdates := 0
+	resolvedUpdates := 0
+	lastPendingRequestID := ""
+	for _, message := range msgs {
+		switch message.kind {
+		case "card":
+			cardSends++
+		case "update_pending_perm_card":
+			pendingUpdates++
+			if message.updatedPendingCard != nil {
+				lastPendingRequestID = message.updatedPendingCard.RequestID
+			}
+		case "update_perm_card":
+			resolvedUpdates++
+		}
+	}
+	if cardSends != 1 {
+		t.Fatalf("permission card sends = %d, want 1; msgs=%#v", cardSends, msgs)
+	}
+	if pendingUpdates < 1 {
+		t.Fatalf("expected pending permission card update for second request, msgs=%#v", msgs)
+	}
+	if resolvedUpdates < 1 {
+		t.Fatalf("expected resolved permission card update for first request, msgs=%#v", msgs)
+	}
+	if lastPendingRequestID != "perm-reuse-2" {
+		t.Fatalf("last pending request id = %q, want perm-reuse-2; msgs=%#v", lastPendingRequestID, msgs)
+	}
+}
+
+func TestPermissionQueuedRequestDoesNotOverrideActiveCardBeforeResolve(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if err := adapter.bindThenRun(context.Background(), "session-queue-order", "run-queue-order", "chat-queue-order", "执行审批时序任务"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-queue-order", "run-queue-order", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-order-1",
+			"reason":     "审批一",
+		},
+	})
+	time.Sleep(30 * time.Millisecond)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-queue-order", "run-queue-order", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-order-2",
+			"reason":     "审批二",
+		},
+	})
+	time.Sleep(60 * time.Millisecond)
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	for _, message := range msgs {
+		if message.kind == "update_pending_perm_card" &&
+			message.updatedPendingCard != nil &&
+			message.updatedPendingCard.RequestID == "perm-order-2" {
+			t.Fatalf("queued pending request should not override active card before resolve, msgs=%#v", msgs)
+		}
+	}
+
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		RequestID: "perm-order-1",
+		Decision:  "allow_once",
+	}); err != nil {
+		t.Fatalf("handle first card action: %v", err)
+	}
+	time.Sleep(750 * time.Millisecond)
+
+	msgs = adapterTestMessenger(adapter).snapshot()
+	resolvedIndex := -1
+	pendingIndex := -1
+	for i, message := range msgs {
+		if message.kind == "update_perm_card" &&
+			message.resolvedCard != nil &&
+			message.resolvedCard.RequestID == "perm-order-1" {
+			resolvedIndex = i
+		}
+		if message.kind == "update_pending_perm_card" &&
+			message.updatedPendingCard != nil &&
+			message.updatedPendingCard.RequestID == "perm-order-2" {
+			pendingIndex = i
+		}
+	}
+	if resolvedIndex < 0 {
+		t.Fatalf("expected resolved card update for first request, msgs=%#v", msgs)
+	}
+	if pendingIndex < 0 {
+		t.Fatalf("expected switch to second pending request after resolve, msgs=%#v", msgs)
+	}
+	if pendingIndex <= resolvedIndex {
+		t.Fatalf("pending switch should happen after resolved card update, msgs=%#v", msgs)
+	}
+}
+
+func TestPermissionActionFallsBackToCurrentPendingRequestWhenStale(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if err := adapter.bindThenRun(context.Background(), "session-stale", "run-stale", "chat-stale", "执行审批回退任务"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-stale", "run-stale", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-stale-1",
+			"reason":     "审批一",
+		},
+	})
+	time.Sleep(20 * time.Millisecond)
+
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		RequestID: "perm-stale-1",
+		Decision:  "allow_once",
+	}); err != nil {
+		t.Fatalf("resolve first permission: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-stale", "run-stale", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-stale-2",
+			"reason":     "审批二",
+		},
+	})
+	time.Sleep(30 * time.Millisecond)
+	permissionCardID := ""
+	for _, message := range adapterTestMessenger(adapter).snapshot() {
+		if message.kind == "card" {
+			permissionCardID = message.cardID
+		}
+	}
+	if permissionCardID == "" {
+		t.Fatal("expected permission card id for stale fallback test")
+	}
+
+	gateway := adapterTestGateway(adapter)
+	gateway.mu.Lock()
+	gateway.resolveHook = func(requestID string, _ string) error {
+		if requestID == "perm-stale-1" {
+			return assertErr(`runtime: permission request "perm-stale-1" not found`)
+		}
+		return nil
+	}
+	gateway.mu.Unlock()
+
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		RequestID: "perm-stale-1",
+		CardID:    permissionCardID,
+		Decision:  "reject",
+	}); err != nil {
+		t.Fatalf("resolve stale permission should fallback: %v", err)
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	calls := gateway.snapshotCalls()
+	resolveStale := 0
+	resolveFallback := 0
+	for _, call := range calls {
+		if call == "resolve:perm-stale-1:reject" {
+			resolveStale++
+		}
+		if call == "resolve:perm-stale-2:reject" {
+			resolveFallback++
+		}
+	}
+	if resolveStale == 0 || resolveFallback == 0 {
+		t.Fatalf("expected stale+fallback resolve calls, got %#v", calls)
+	}
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	foundRejected := false
+	for _, message := range msgs {
+		if message.kind == "update_perm_card" && message.resolvedCard != nil &&
+			message.resolvedCard.RequestID == "perm-stale-2" && !message.resolvedCard.Approved {
+			foundRejected = true
+			break
+		}
+	}
+	if !foundRejected {
+		t.Fatalf("expected fallback request resolved card update, msgs=%#v", msgs)
+	}
+}
+
+func TestPermissionActionIgnoresAlreadyResolvedRequestOnOpaquePrimaryError(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if err := adapter.bindThenRun(context.Background(), "session-opaque", "run-opaque", "chat-opaque", "执行审批回退任务"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-opaque", "run-opaque", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-opaque-1",
+			"reason":     "审批一",
+		},
+	})
+	time.Sleep(20 * time.Millisecond)
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		RequestID: "perm-opaque-1",
+		Decision:  "allow_once",
+	}); err != nil {
+		t.Fatalf("resolve first permission: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-opaque", "run-opaque", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-opaque-2",
+			"reason":     "审批二",
+		},
+	})
+	time.Sleep(30 * time.Millisecond)
+
+	permissionCardID := ""
+	for _, message := range adapterTestMessenger(adapter).snapshot() {
+		if message.kind == "card" {
+			permissionCardID = message.cardID
+		}
+	}
+	if permissionCardID == "" {
+		t.Fatal("expected permission card id for opaque fallback test")
+	}
+
+	gateway := adapterTestGateway(adapter)
+	gateway.mu.Lock()
+	gateway.resolveHook = func(requestID string, _ string) error {
+		if strings.TrimSpace(requestID) == "perm-opaque-1" {
+			return assertErr("gateway rpc gateway.resolvePermission failed (internal_error): resolve_permission failed")
+		}
+		return nil
+	}
+	gateway.mu.Unlock()
+
+	err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		EventID:   "evt-opaque-fallback",
+		RequestID: "perm-opaque-1",
+		Decision:  "allow_once",
+		ActionType: "permission",
+		CardID:    permissionCardID,
+	})
+	if err != nil {
+		t.Fatalf("resolve opaque stale permission should be ignored: %v", err)
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	calls := gateway.snapshotCalls()
+	resolvePrimary := 0
+	for _, call := range calls {
+		if call == "resolve:perm-opaque-1:allow_once" {
+			resolvePrimary++
+		}
+	}
+	if resolvePrimary != 1 {
+		t.Fatalf("expected only initial resolve call for perm-opaque-1, got %#v", calls)
+	}
+	for _, call := range calls {
+		if call == "resolve:perm-opaque-2:allow_once" {
+			t.Fatalf("stale callback must not fallback-resolve next pending request, got %#v", calls)
+		}
+	}
+}
+
+func TestHandleCardActionAcceptsAllowAliasDecision(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if err := adapter.bindThenRun(context.Background(), "session-allow-alias", "run-allow-alias", "chat-allow-alias", "执行审批别名任务"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-allow-alias", "run-allow-alias", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-allow-alias-1",
+			"reason":     "审批别名",
+		},
+	})
+	time.Sleep(30 * time.Millisecond)
+
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		RequestID: "perm-allow-alias-1",
+		Decision:  "allow",
+	}); err != nil {
+		t.Fatalf("handle allow alias decision: %v", err)
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	foundResolved := false
+	for _, message := range msgs {
+		if message.kind == "update_perm_card" && message.resolvedCard != nil &&
+			message.resolvedCard.RequestID == "perm-allow-alias-1" && message.resolvedCard.Approved {
+			foundResolved = true
+			break
+		}
+	}
+	if !foundResolved {
+		t.Fatalf("expected resolved permission card update for allow alias, msgs=%#v", msgs)
+	}
+}
+
+func TestHandleMessageInterruptsPreviousPendingRunInSameChat(t *testing.T) {
+	adapter := newTestAdapter(t)
+	gateway := adapterTestGateway(adapter)
+	gateway.mu.Lock()
+	gateway.cancelResult = true
+	gateway.mu.Unlock()
+
+	first := FeishuMessageEvent{
+		EventID:     "evt-int-1",
+		MessageID:   "msg-int-1",
+		ChatID:      "chat-interrupt",
+		ChatType:    "p2p",
+		ContentText: "第一条任务",
+	}
+	second := FeishuMessageEvent{
+		EventID:     "evt-int-2",
+		MessageID:   "msg-int-2",
+		ChatID:      "chat-interrupt",
+		ChatType:    "p2p",
+		ContentText: "第二条任务",
+	}
+	if err := adapter.HandleMessage(context.Background(), first); err != nil {
+		t.Fatalf("handle first message: %v", err)
+	}
+	if err := adapter.HandleMessage(context.Background(), second); err != nil {
+		t.Fatalf("handle second message: %v", err)
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	sessionID := BuildSessionID("chat-interrupt")
+	firstRunID := BuildRunID("msg-int-1")
+	secondRunID := BuildRunID("msg-int-2")
+
+	calls := gateway.snapshotCalls()
+	wantCancel := "cancel:" + sessionID + ":" + firstRunID
+	foundCancel := false
+	for _, call := range calls {
+		if call == wantCancel {
+			foundCancel = true
+			break
+		}
+	}
+	if !foundCancel {
+		t.Fatalf("expected cancel call %q, got %#v", wantCancel, calls)
+	}
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	foundInterrupted := false
+	for _, message := range msgs {
+		if message.kind == "update_card" &&
+			message.runCard.Status == "interrupted" &&
+			message.runCard.Result == "interrupted" {
+			foundInterrupted = true
+			break
+		}
+	}
+	if !foundInterrupted {
+		t.Fatalf("expected interrupted status card update, msgs=%#v", msgs)
+	}
+
+	adapter.mu.RLock()
+	_, oldExists := adapter.activeRuns[runBindingKey(sessionID, firstRunID)]
+	_, newExists := adapter.activeRuns[runBindingKey(sessionID, secondRunID)]
+	adapter.mu.RUnlock()
+	if oldExists {
+		t.Fatal("expected old run to be untracked after interrupt")
+	}
+	if !newExists {
+		t.Fatal("expected new run to stay active")
+	}
+}
+
+func TestPermissionResolvedEventUpdatesPermissionCard(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if err := adapter.bindThenRun(context.Background(), "session-resolve", "run-resolve", "chat-resolve", "执行审批事件任务"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-resolve", "run-resolve", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-resolve-1",
+			"tool_name":  "filesystem_write_file",
+			"reason":     "需要写文件权限",
+		},
+	})
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-resolve", "run-resolve", "run_progress", map[string]any{
+		"runtime_event_type": "permission_resolved",
+		"payload": map[string]any{
+			"request_id": "perm-resolve-1",
+			"decision":   "allow",
+		},
+	})
+	time.Sleep(40 * time.Millisecond)
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	updatedResolved := false
+	lastApprovalStatus := ""
+	for _, message := range msgs {
+		if message.kind == "update_perm_card" && message.resolvedCard != nil &&
+			message.resolvedCard.RequestID == "perm-resolve-1" && message.resolvedCard.Approved {
+			updatedResolved = true
+		}
+		if message.kind == "update_card" {
+			lastApprovalStatus = message.runCard.ApprovalStatus
+		}
+	}
+	if !updatedResolved {
+		t.Fatalf("expected resolved permission card update from permission_resolved event, msgs=%#v", msgs)
+	}
+	if lastApprovalStatus != "approved" {
+		t.Fatalf("last approval status = %q, want approved; msgs=%#v", lastApprovalStatus, msgs)
+	}
+}
+
+func TestUpdateApprovalStatusFinalizesHistoricalPermissionCards(t *testing.T) {
+	adapter := newTestAdapter(t)
+	sessionID := BuildSessionID("chat-approval-history")
+	runID := BuildRunID("msg-approval-history")
+	chatID := "chat-approval-history"
+	adapter.trackSession(sessionID, runID, chatID, "history permission task")
+	if err := adapter.ensureRunCard(context.Background(), sessionID, runID); err != nil {
+		t.Fatalf("ensureRunCard: %v", err)
+	}
+
+	key := runBindingKey(sessionID, runID)
+	adapter.mu.Lock()
+	binding := adapter.activeRuns[key]
+	binding.ApprovalRecords = []approvalEntry{
+		{
+			RequestID: "perm-history-1",
+			ToolName:  "filesystem_write_file",
+			Operation: "write_file",
+			Target:    "1.txt",
+			Reason:    "需要写文件权限",
+			Decision:  "pending",
+		},
+	}
+	adapter.activeRuns[key] = binding
+	adapter.requestRuns["perm-history-1"] = key
+	adapter.permissionCards["perm-history-1"] = "perm-card-current"
+	adapter.runPermissionCards[key] = "perm-card-current"
+	adapter.permissionCardRuns["perm-card-current"] = key
+	adapter.permissionCardRuns["perm-card-old"] = key
+	adapter.runPermissionCardHistory[key] = map[string]struct{}{
+		"perm-card-current": {},
+		"perm-card-old":     {},
+	}
+	adapter.runPermissionActiveRequest[key] = "perm-history-1"
+	adapter.mu.Unlock()
+
+	adapter.updateApprovalStatus("perm-history-1", "allow_once")
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	updatedCurrent := false
+	updatedOld := false
+	for _, message := range msgs {
+		if message.kind != "update_perm_card" || message.resolvedCard == nil || !message.resolvedCard.Approved {
+			continue
+		}
+		if message.chatID == "perm-card-current" && message.resolvedCard.RequestID == "perm-history-1" {
+			updatedCurrent = true
+		}
+		if message.chatID == "perm-card-old" && message.resolvedCard.RequestID == "perm-history-1" {
+			updatedOld = true
+		}
+	}
+	if !updatedCurrent || !updatedOld {
+		t.Fatalf("expected current and historical permission cards finalized, msgs=%#v", msgs)
+	}
+}
+
+func TestRunTerminalFinalizesPermissionCardUsingRunScopedCardFallback(t *testing.T) {
+	adapter := newTestAdapter(t)
+	sessionID := BuildSessionID("chat-terminal-perm")
+	runID := BuildRunID("msg-terminal-perm")
+	chatID := "chat-terminal-perm"
+	adapter.trackSession(sessionID, runID, chatID, "terminal permission task")
+	if err := adapter.ensureRunCard(context.Background(), sessionID, runID); err != nil {
+		t.Fatalf("ensureRunCard: %v", err)
+	}
+
+	key := runBindingKey(sessionID, runID)
+	adapter.mu.Lock()
+	binding := adapter.activeRuns[key]
+	binding.ApprovalRecords = []approvalEntry{
+		{
+			RequestID: "perm-terminal-1",
+			ToolName:  "filesystem_write_file",
+			Operation: "write_file",
+			Target:    "1.txt",
+			Reason:    "需要写文件权限",
+			Decision:  "allow_once",
+		},
+	}
+	adapter.activeRuns[key] = binding
+	adapter.runPermissionCards[key] = "perm-card-fallback"
+	adapter.permissionCardRuns["perm-card-fallback"] = key
+	adapter.permissionCardRuns["perm-card-stale"] = key
+	adapter.runPermissionCardHistory[key] = map[string]struct{}{
+		"perm-card-fallback": {},
+		"perm-card-stale":    {},
+	}
+	delete(adapter.permissionCards, "perm-terminal-1")
+	delete(adapter.requestRuns, "perm-terminal-1")
+	adapter.mu.Unlock()
+
+	adapter.markRunTerminal(sessionID, runID, "success", "done", "")
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	foundFallbackResolved := false
+	foundStaleResolved := false
+	for _, message := range msgs {
+		if message.kind == "update_perm_card" &&
+			message.resolvedCard != nil &&
+			message.resolvedCard.RequestID == "perm-terminal-1" &&
+			message.resolvedCard.Approved {
+			if message.chatID == "perm-card-fallback" {
+				foundFallbackResolved = true
+			}
+			if message.chatID == "perm-card-stale" {
+				foundStaleResolved = true
+			}
+		}
+	}
+	if !foundFallbackResolved || !foundStaleResolved {
+		t.Fatalf("expected terminal fallback to finalize current and stale permission cards, msgs=%#v", msgs)
 	}
 }
 
@@ -817,6 +1499,32 @@ func TestRunTerminalEventUntracksActiveRun(t *testing.T) {
 	adapter.mu.RUnlock()
 	if exists {
 		t.Fatalf("expected run binding cleaned after terminal event")
+	}
+}
+
+func TestRefreshActiveCardsDoesNotForceFailStalledRun(t *testing.T) {
+	adapter := newTestAdapter(t)
+	base := time.Now().UTC()
+	adapter.nowFn = func() time.Time { return base }
+
+	sessionID := BuildSessionID("chat-stalled")
+	runID := BuildRunID("msg-stalled")
+	adapter.trackSession(sessionID, runID, "chat-stalled", "stalled task")
+	if err := adapter.ensureRunCard(context.Background(), sessionID, runID); err != nil {
+		t.Fatalf("ensureRunCard: %v", err)
+	}
+
+	adapter.nowFn = func() time.Time { return base.Add(defaultRunStallTimeout + 5*time.Second) }
+	adapter.refreshActiveCards(context.Background())
+
+	adapter.mu.RLock()
+	binding, exists := adapter.activeRuns[runBindingKey(sessionID, runID)]
+	adapter.mu.RUnlock()
+	if !exists {
+		t.Fatalf("expected stalled run to stay tracked")
+	}
+	if strings.TrimSpace(strings.ToLower(binding.Result)) != "pending" {
+		t.Fatalf("result = %q, want pending", binding.Result)
 	}
 }
 
@@ -1658,6 +2366,45 @@ func TestHelperFunctionsCoverFallbackBranches(t *testing.T) {
 		"payload": map[string]any{"to": "plan"},
 	}, "thinking"); status != "planning" {
 		t.Fatalf("status = %q, want planning", status)
+	}
+	if stalled := shouldMarkRunStalled(sessionBinding{
+		Result:         "pending",
+		ApprovalStatus: "none",
+		LastEventTime:  time.Now().UTC().Add(-(defaultRunStallTimeout + time.Second)),
+	}, time.Now().UTC()); !stalled {
+		t.Fatal("expected stalled run to be detected")
+	}
+	if stalled := shouldMarkRunStalled(sessionBinding{
+		Result:         "pending",
+		ApprovalStatus: "pending",
+		LastEventTime:  time.Now().UTC().Add(-(defaultRunStallTimeout + time.Second)),
+	}, time.Now().UTC()); stalled {
+		t.Fatal("did not expect approval-pending run to be marked stalled")
+	}
+	if stalled := shouldMarkRunStalled(sessionBinding{
+		Result:         "success",
+		ApprovalStatus: "none",
+		LastEventTime:  time.Now().UTC().Add(-(defaultRunStallTimeout + time.Second)),
+	}, time.Now().UTC()); stalled {
+		t.Fatal("did not expect terminal run to be marked stalled")
+	}
+	if status := terminalStatusFromResult("success"); status != "success" {
+		t.Fatalf("terminal status = %q, want success", status)
+	}
+	if status := terminalStatusFromResult("failure"); status != "failure" {
+		t.Fatalf("terminal status = %q, want failure", status)
+	}
+	if status := terminalStatusFromResult("unknown"); status != "running" {
+		t.Fatalf("terminal status = %q, want running fallback", status)
+	}
+	if text := buildTerminalFallbackText("success", "执行完成"); text != "任务已完成：\n执行完成" {
+		t.Fatalf("terminal fallback text = %q, want success summary", text)
+	}
+	if text := buildTerminalFallbackText("failure", "命令执行失败"); text != "任务执行失败：\n命令执行失败" {
+		t.Fatalf("terminal fallback text = %q, want failure summary", text)
+	}
+	if text := buildTerminalFallbackText("failure", ""); text != "任务执行失败，请稍后重试。" {
+		t.Fatalf("terminal fallback text = %q, want failure default", text)
 	}
 	safeLogAdapter := &Adapter{}
 	safeLogAdapter.safeLog("ignored")

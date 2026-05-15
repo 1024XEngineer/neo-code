@@ -148,7 +148,7 @@ func (w *WebhookIngress) handleCardCallback(handler IngressHandler) http.Handler
 		}
 		actionType := strings.TrimSpace(strings.ToLower(callback.Action.Value["action_type"]))
 		requestID := strings.TrimSpace(callback.Action.Value["request_id"])
-		decision := strings.TrimSpace(strings.ToLower(callback.Action.Value["decision"]))
+		decision := normalizeApprovalDecision(callback.Action.Value["decision"])
 		status := strings.TrimSpace(strings.ToLower(callback.Action.Value["status"]))
 		value := strings.TrimSpace(callback.Action.Value["value"])
 		message := strings.TrimSpace(callback.Action.Value["message"])
@@ -161,7 +161,7 @@ func (w *WebhookIngress) handleCardCallback(handler IngressHandler) http.Handler
 		}
 		valid := requestID != ""
 		if valid && actionType == "permission" {
-			valid = decision == "allow_once" || decision == "reject"
+			valid = isApprovalApprovedDecision(decision) || isApprovalRejectedDecision(decision)
 		}
 		if valid && actionType == "user_question" {
 			valid = status == "answered" || status == "skipped"
@@ -172,6 +172,7 @@ func (w *WebhookIngress) handleCardCallback(handler IngressHandler) http.Handler
 		}
 		event := FeishuCardActionEvent{
 			EventID:    strings.TrimSpace(callback.Header.EventID),
+			CardID:     strings.TrimSpace(callback.OpenMessageID),
 			ActionType: actionType,
 			RequestID:  requestID,
 			Decision:   decision,

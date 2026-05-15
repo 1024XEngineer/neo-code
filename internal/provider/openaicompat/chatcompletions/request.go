@@ -82,12 +82,23 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 	}
 
 	if tc := req.ThinkingConfig; tc != nil {
-		if tc.Enabled && tc.Effort != "" {
+		if tc.Enabled && tc.Effort != "" && !shouldSkipReasoningEffort(cfg, model) {
 			payload.ReasoningEffort = tc.Effort
 		}
 	}
 
 	return payload, nil
+}
+
+// shouldSkipReasoningEffort 判断当前 openaicompat 目标是否应跳过 reasoning_effort 字段。
+// 说明：MiMo 兼容端点对该字段兼容性不稳定，可能直接返回 Param Incorrect。
+func shouldSkipReasoningEffort(cfg provider.RuntimeConfig, model string) bool {
+	normalizedBaseURL := strings.ToLower(strings.TrimSpace(cfg.BaseURL))
+	normalizedModel := strings.ToLower(strings.TrimSpace(model))
+	if strings.Contains(normalizedBaseURL, "xiaomimimo.com") {
+		return true
+	}
+	return strings.HasPrefix(normalizedModel, "mimo-")
 }
 
 // normalizeToolSchemaForOpenAI 归一化工具参数 schema，避免修改调用方原始结构并尽量保持语义。
