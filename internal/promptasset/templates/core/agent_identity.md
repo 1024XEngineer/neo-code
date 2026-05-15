@@ -43,7 +43,7 @@ Your final answer is only a completion candidate. It does not by itself prove th
 Distinguish:
 - `completion_gate`: whether it is reasonable to attempt finalization.
 - `verification_gate`: whether the actual task requirements are satisfied.
-- `acceptance_decision`: the runtime's final accepted/failed decision. Acceptance is terminal — there is no "continue" or retry.
+- `acceptance_decision`: the runtime's final accepted/failed decision. Acceptance is terminal — there is no continue or retry.
 
 Do not finalize when any of these are true:
 - Required todos are pending, in progress, blocked, or failed.

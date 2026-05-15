@@ -813,9 +813,11 @@ func TestExecuteAssistantToolCallsEmitsResultsWhenDoneAndPersistsInCallOrder(t *
 	var mu sync.Mutex
 	active := 0
 	maxActive := 0
+	var enterBarrier sync.WaitGroup
 	slowStarted := make(chan struct{})
 	releaseSlow := make(chan struct{})
 	var slowStartedOnce sync.Once
+	enterBarrier.Add(2)
 	manager := &stubToolManager{
 		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
 			mu.Lock()
@@ -824,6 +826,9 @@ func TestExecuteAssistantToolCallsEmitsResultsWhenDoneAndPersistsInCallOrder(t *
 				maxActive = active
 			}
 			mu.Unlock()
+			// Wait for both tools to enter executeFn before proceeding
+			enterBarrier.Done()
+			enterBarrier.Wait()
 			if input.Name == "tool_slow" {
 				slowStartedOnce.Do(func() { close(slowStarted) })
 				select {
