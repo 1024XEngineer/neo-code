@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -147,6 +148,17 @@ export default function Sidebar({ collapsed }: SidebarProps) {
     store.prepareNewChat()
   }
 
+  const modalOverlays = typeof document === 'undefined'
+    ? null
+    : createPortal(
+        <>
+          {mcpModalOpen && <McpModal onClose={() => setMcpModalOpen(false)} />}
+          {skillModalOpen && <SkillModal onClose={() => setSkillModalOpen(false)} />}
+          {providerModalOpen && <ProviderModal onClose={() => setProviderModalOpen(false)} />}
+        </>,
+        document.body,
+      )
+
   // Collapsed sidebar strip
   if (collapsed) {
     return (
@@ -167,9 +179,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
         <button className="sidebar-strip-btn" onClick={() => setProviderModalOpen(true)} title="供应商">
           <Server size={16} />
         </button>
-        {mcpModalOpen && <McpModal onClose={() => setMcpModalOpen(false)} />}
-        {skillModalOpen && <SkillModal onClose={() => setSkillModalOpen(false)} />}
-        {providerModalOpen && <ProviderModal onClose={() => setProviderModalOpen(false)} />}
+        {modalOverlays}
       </>
     )
   }
