@@ -1,72 +1,11 @@
 package session
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 )
-
-func acceptText(target string) AcceptChecks {
-	return AcceptChecks{{Kind: AcceptCheckOutputOnly, Target: target}}
-}
-
-func TestAcceptChecksUnmarshalRequiredDefaultAndExplicitFalse(t *testing.T) {
-	t.Parallel()
-
-	var checks AcceptChecks
-	if err := json.Unmarshal([]byte(`[{"kind":"output_only"},{"kind":"tool_fact","required":false}]`), &checks); err != nil {
-		t.Fatalf("Unmarshal() error = %v", err)
-	}
-	if len(checks) != 2 {
-		t.Fatalf("len = %d, want 2", len(checks))
-	}
-	if !checks[0].RequiredValue() {
-		t.Fatalf("omitted required should default to true: %+v", checks[0])
-	}
-	if checks[1].RequiredValue() {
-		t.Fatalf("explicit required=false should stay optional: %+v", checks[1])
-	}
-}
-
-func TestAcceptChecksNormalizePreservesDistinctParams(t *testing.T) {
-	t.Parallel()
-
-	checks := AcceptChecks{
-		{Kind: AcceptCheckContentContains, Target: "README.md", Params: map[string]string{"contains": "NeoCode"}},
-		{Kind: AcceptCheckContentContains, Target: "README.md", Params: map[string]string{"contains": "Todo"}},
-		{Kind: AcceptCheckContentContains, Target: "README.md", Params: map[string]string{"contains": "NeoCode"}},
-	}
-
-	normalized := checks.Normalize()
-	if len(normalized) != 2 {
-		t.Fatalf("Normalize() length = %d, want 2: %+v", len(normalized), normalized)
-	}
-	if normalized[0].Params["contains"] != "NeoCode" || normalized[1].Params["contains"] != "Todo" {
-		t.Fatalf("Normalize() = %+v, want distinct contains params kept", normalized)
-	}
-}
-
-func TestAcceptChecksNormalizePreservesDistinctRequired(t *testing.T) {
-	t.Parallel()
-
-	required := true
-	optional := false
-	checks := AcceptChecks{
-		{Kind: AcceptCheckCommandSuccess, Target: "go test ./...", Required: &required},
-		{Kind: AcceptCheckCommandSuccess, Target: "go test ./...", Required: &optional},
-	}
-
-	normalized := checks.Normalize()
-	if len(normalized) != 2 {
-		t.Fatalf("Normalize() length = %d, want 2: %+v", len(normalized), normalized)
-	}
-	if !normalized[0].RequiredValue() || normalized[1].RequiredValue() {
-		t.Fatalf("Normalize() required flags = [%v %v], want [true false]",
-			normalized[0].RequiredValue(), normalized[1].RequiredValue())
-	}
-}
 
 func TestNormalizeSummaryViewFallsBackToBuiltSummaryWhenStructurallyInvalid(t *testing.T) {
 	t.Parallel()
@@ -75,7 +14,6 @@ func TestNormalizeSummaryViewFallsBackToBuiltSummaryWhenStructurallyInvalid(t *t
 		Goal:        "为 runtime 引入 plan/build 模式",
 		Steps:       []string{"扩展 session", "过滤工具", "调整 runtime"},
 		Constraints: []string{"plan 模式禁止写工具"},
-		Verify:      acceptText("build 结束后进入 verify"),
 		Todos: []TodoItem{
 			{ID: "todo-1", Content: "扩展 session", Status: TodoStatusPending},
 			{ID: "todo-2", Content: "过滤工具", Status: TodoStatusCompleted},
@@ -88,7 +26,6 @@ func TestNormalizeSummaryViewFallsBackToBuiltSummaryWhenStructurallyInvalid(t *t
 	got := NormalizeSummaryView(SummaryView{
 		Goal:          "  ",
 		KeySteps:      []string{"仅一步"},
-		Verify:        acceptText("验收"),
 		ActiveTodoIDs: []string{"missing"},
 	}, spec)
 	want := BuildSummaryView(spec)
@@ -108,9 +45,8 @@ func TestBuildSummaryViewUsesActiveNonTerminalTodosOnly(t *testing.T) {
 	t.Parallel()
 
 	spec, err := NormalizePlanSpec(PlanSpec{
-		Goal:   "整理当前执行摘要",
-		Steps:  []string{"步骤一", "步骤二"},
-		Verify: acceptText("验证一"),
+		Goal:  "整理当前执行摘要",
+		Steps: []string{"步骤一", "步骤二"},
 		Todos: []TodoItem{
 			{ID: "todo-1", Content: "待执行", Status: TodoStatusPending},
 			{ID: "todo-2", Content: "执行中", Status: TodoStatusInProgress},
@@ -141,9 +77,8 @@ func TestNormalizePlanArtifactDefaultsAndStatusNormalization(t *testing.T) {
 		Revision: 0,
 		Status:   PlanStatus("unknown"),
 		Spec: PlanSpec{
-			Goal:   "规范化计划对象",
-			Steps:  []string{"步骤一"},
-			Verify: acceptText("验证一"),
+			Goal:  "规范化计划对象",
+			Steps: []string{"步骤一"},
 		},
 	})
 	if err != nil {
@@ -175,9 +110,8 @@ func TestNormalizePlanArtifactPreservesCreatedAtAndNormalizesUpdatedAt(t *testin
 		CreatedAt: created,
 		UpdatedAt: updated,
 		Spec: PlanSpec{
-			Goal:   "保留时间字段",
-			Steps:  []string{"步骤一"},
-			Verify: acceptText("验证一"),
+			Goal:  "保留时间字段",
+			Steps: []string{"步骤一"},
 		},
 	})
 	if err != nil {
@@ -195,9 +129,8 @@ func TestNormalizeSummaryViewAllowsEmptyTodoRefsWhenPlanHasNoTodos(t *testing.T)
 	t.Parallel()
 
 	spec, err := NormalizePlanSpec(PlanSpec{
-		Goal:   "无 todo 计划",
-		Steps:  []string{"步骤一"},
-		Verify: acceptText("验证一"),
+		Goal:  "无 todo 计划",
+		Steps: []string{"步骤一"},
 	})
 	if err != nil {
 		t.Fatalf("NormalizePlanSpec() error = %v", err)
@@ -206,7 +139,6 @@ func TestNormalizeSummaryViewAllowsEmptyTodoRefsWhenPlanHasNoTodos(t *testing.T)
 	summary := NormalizeSummaryView(SummaryView{
 		Goal:     "无 todo 计划",
 		KeySteps: []string{"步骤一"},
-		Verify:   acceptText("验证一"),
 	}, spec)
 	if summary.Goal != "无 todo 计划" {
 		t.Fatalf("Goal = %q", summary.Goal)
@@ -223,7 +155,6 @@ func TestRenderPlanContentIncludesAllSections(t *testing.T) {
 		Goal:          "输出完整计划正文",
 		Steps:         []string{"步骤一", "步骤二"},
 		Constraints:   []string{"约束一"},
-		Verify:        acceptText("验证一"),
 		OpenQuestions: []string{"问题一"},
 		Todos: []TodoItem{
 			{ID: "todo-1", Content: "待执行", Status: TodoStatusPending},
@@ -236,7 +167,6 @@ func TestRenderPlanContentIncludesAllSections(t *testing.T) {
 		"输出完整计划正文",
 		"实施步骤",
 		"约束",
-		"验证",
 		"当前待办",
 		"id=todo-1",
 		"未决问题",
@@ -276,7 +206,7 @@ func TestRenderPlanContentOmittedSections(t *testing.T) {
 		}
 	}
 	// Should not contain these sections when empty
-	unwanted := []string{"实施步骤", "约束", "验证", "当前待办", "未决问题"}
+	unwanted := []string{"实施步骤", "约束", "当前待办", "未决问题"}
 	for _, unwantedStr := range unwanted {
 		if strings.Contains(rendered, unwantedStr) {
 			t.Fatalf("RenderPlanContent() = %q, should not contain %q", rendered, unwantedStr)
@@ -313,9 +243,8 @@ func TestNormalizePlanArtifactEmptyID(t *testing.T) {
 	_, err := NormalizePlanArtifact(&PlanArtifact{
 		ID: "",
 		Spec: PlanSpec{
-			Goal:   "测试",
-			Steps:  []string{"步骤一"},
-			Verify: acceptText("验证一"),
+			Goal:  "测试",
+			Steps: []string{"步骤一"},
 		},
 	})
 	if err == nil {
@@ -387,20 +316,19 @@ func TestClampStringListMaxItems(t *testing.T) {
 func TestSummaryViewStructurallyValidDetectsInvalid(t *testing.T) {
 	t.Parallel()
 
-	spec := PlanSpec{Goal: "目标", Steps: []string{"步骤一"}, Verify: acceptText("验证一")}
+	spec := PlanSpec{Goal: "目标", Steps: []string{"步骤一"}}
 	// Empty goal
 	if summaryViewStructurallyValid(SummaryView{}, spec) {
 		t.Fatal("expected false for empty summary")
 	}
 	// Missing key steps
-	if summaryViewStructurallyValid(SummaryView{Goal: "目标", Verify: acceptText("v")}, spec) {
+	if summaryViewStructurallyValid(SummaryView{Goal: "目标"}, spec) {
 		t.Fatal("expected false for missing key steps")
 	}
 	// Unknown active todo IDs
 	if summaryViewStructurallyValid(SummaryView{
 		Goal:          "目标",
 		KeySteps:      []string{"步骤一"},
-		Verify:        acceptText("验证一"),
 		ActiveTodoIDs: []string{"unknown"},
 	}, spec) {
 		t.Fatal("expected false for unknown todo IDs")

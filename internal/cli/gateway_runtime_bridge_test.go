@@ -1050,7 +1050,6 @@ func TestGatewayRuntimePortBridgeListSessionTodosAndSnapshot(t *testing.T) {
 				SessionID: "session-2",
 				Phase:     "acceptance",
 				Decision:  agentruntime.DecisionSnapshot{Status: "continue", StopReason: "unverified_write"},
-				SubAgents: agentruntime.SubAgentSnapshot{StartedCount: 1, CompletedCount: 1, FailedCount: 0},
 			},
 		}
 		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)

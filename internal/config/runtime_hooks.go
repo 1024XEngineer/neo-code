@@ -25,6 +25,7 @@ const (
 const (
 	runtimeHookScopeUser   = "user"
 	runtimeHookKindBuiltIn = "builtin"
+	runtimeHookKindCommand = "command"
 	runtimeHookKindHTTP    = "http"
 	runtimeHookModeSync    = "sync"
 	runtimeHookModeObserve = "observe"
@@ -41,6 +42,7 @@ const (
 	runtimeHookPointBeforeToolCall           = "before_tool_call"
 	runtimeHookPointAfterToolResult          = "after_tool_result"
 	runtimeHookPointBeforeCompletionDecision = "before_completion_decision"
+	runtimeHookPointAcceptGate               = "accept_gate"
 	runtimeHookPointBeforePermissionDecision = "before_permission_decision"
 	runtimeHookPointAfterToolFailure         = "after_tool_failure"
 	runtimeHookPointSessionStart             = "session_start"
@@ -249,6 +251,7 @@ func (c RuntimeHookItemConfig) Validate(defaultFailurePolicy string) error {
 	case runtimeHookPointBeforeToolCall,
 		runtimeHookPointAfterToolResult,
 		runtimeHookPointBeforeCompletionDecision,
+		runtimeHookPointAcceptGate,
 		runtimeHookPointBeforePermissionDecision,
 		runtimeHookPointAfterToolFailure,
 		runtimeHookPointSessionStart,
@@ -271,11 +274,12 @@ func (c RuntimeHookItemConfig) Validate(defaultFailurePolicy string) error {
 	normalizedKind := strings.ToLower(strings.TrimSpace(c.Kind))
 	switch normalizedKind {
 	case runtimeHookKindBuiltIn:
+	case runtimeHookKindCommand:
 	case runtimeHookKindHTTP:
 	default:
 		if _, external := runtimeHookExternalKinds[normalizedKind]; external {
 			return fmt.Errorf(
-				"external hook kind %q is not supported in P6-lite; only builtin/http-observe hooks are enabled",
+				"external hook kind %q is not supported in current stage; only builtin/command/http-observe hooks are enabled",
 				c.Kind,
 			)
 		}
@@ -305,6 +309,13 @@ func (c RuntimeHookItemConfig) Validate(defaultFailurePolicy string) error {
 		}
 		if handler == runtimeHookHandlerWarnOnToolCall && !hasWarnOnToolCallTargets(c.Params) {
 			return fmt.Errorf("handler %q requires params.tool_name or params.tool_names", c.Handler)
+		}
+	case runtimeHookKindCommand:
+		if normalizedMode != runtimeHookModeSync {
+			return fmt.Errorf("mode %q is not supported for kind command (only sync)", c.Mode)
+		}
+		if strings.TrimSpace(readRuntimeHookParamString(c.Params, "command")) == "" {
+			return fmt.Errorf("kind command requires params.command")
 		}
 	case runtimeHookKindHTTP:
 		if normalizedMode != runtimeHookModeObserve {

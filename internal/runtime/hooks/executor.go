@@ -365,6 +365,10 @@ func sanitizeUserHookContext(input HookContext) HookContext {
 		"has_tool_calls":          {},
 		"assistant_role":          {},
 		"detail":                  {},
+		"workspace_changed":       {},
+		"assistant_text_empty":    {},
+		"todo_summary":            {},
+		"recent_tool_summary":     {},
 	}
 	for key, value := range input.Metadata {
 		normalizedKey := strings.ToLower(strings.TrimSpace(key))

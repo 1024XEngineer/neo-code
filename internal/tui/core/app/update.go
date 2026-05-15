@@ -3070,9 +3070,8 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventSubAgentToolCallResult:                   runtimeEventSubAgentToolCallHandler,
 	tuiservices.EventSubAgentToolCallDenied:                   runtimeEventSubAgentToolCallHandler,
 	tuiservices.EventRuntimeSnapshotUpdated:                   runtimeEventRuntimeSnapshotUpdatedHandler,
-	tuiservices.EventFactsUpdated:                             runtimeEventFactsUpdatedHandler,
-	tuiservices.EventDecisionMade:                             runtimeEventDecisionMadeHandler,
 	tuiservices.EventSubAgentSnapshotUpdated:                  runtimeEventSubAgentSnapshotUpdatedHandler,
+	tuiservices.EventDecisionMade:                             runtimeEventDecisionMadeHandler,
 }
 
 func hookActivityLabel(source string, hookID string) string {
@@ -3497,6 +3496,22 @@ func runtimeEventSubAgentToolCallHandler(a *App, event tuiservices.RuntimeEvent)
 	return false
 }
 
+// runtimeEventSubAgentSnapshotUpdatedHandler 处理 subagent_snapshot_updated 事件，输出聚合计数。
+func runtimeEventSubAgentSnapshotUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.SubAgentSnapshotUpdatedPayload)
+	if !ok {
+		return false
+	}
+	detail := fmt.Sprintf(
+		"started=%d completed=%d failed=%d",
+		payload.SubAgent.StartedCount,
+		payload.SubAgent.CompletedCount,
+		payload.SubAgent.FailedCount,
+	)
+	a.appendActivity("subagent", "SubAgent snapshot updated", detail, false)
+	return false
+}
+
 func runtimeEventPhaseChangedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.PhaseChangedPayload)
 	if !ok {
@@ -3694,6 +3709,7 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 		}
 	case strings.ToLower(string(tuiservices.StopReasonTodoNotConverged)),
 		strings.ToLower(string(tuiservices.StopReasonTodoWaitingExternal)),
+		strings.ToLower(string(tuiservices.StopReasonAcceptContinue)),
 		strings.ToLower(string(tuiservices.StopReasonEmptyResponse)),
 		strings.ToLower(string(tuiservices.StopReasonRepeatCycle)),
 		strings.ToLower(string(tuiservices.StopReasonMaxTurnExceededWithUnconvergedTodos)),
@@ -3710,7 +3726,7 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 		a.state.StatusText = statusCanceled
 		a.appendActivity("run", "Canceled current run", "", false)
 	case strings.ToLower(string(tuiservices.StopReasonVerificationFailed)),
-		strings.ToLower(string(tuiservices.StopReasonAcceptCheckFailed)),
+		strings.ToLower(string(tuiservices.StopReasonAcceptContinueExhausted)),
 		strings.ToLower(string(tuiservices.StopReasonRequiredTodoFailed)),
 		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionDenied)),
 		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionError)):
@@ -3880,26 +3896,6 @@ func runtimeEventRuntimeSnapshotUpdatedHandler(a *App, event tuiservices.Runtime
 	return false
 }
 
-// runtimeEventFactsUpdatedHandler 处理 facts_updated 事件，输出简洁事实更新日志。
-func runtimeEventFactsUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
-	payload, ok := event.Payload.(tuiservices.FactsUpdatedPayload)
-	if !ok {
-		return false
-	}
-	reason := strings.TrimSpace(payload.Reason)
-	if reason == "" {
-		reason = "facts updated"
-	}
-	detail := reason
-	if runtimeFacts, ok := payload.Facts.RuntimeFacts["progress"].(map[string]any); ok {
-		if observed := coerceInt(runtimeFacts["observed_fact_count"]); observed > 0 {
-			detail = fmt.Sprintf("%s (observed_facts=%d)", reason, observed)
-		}
-	}
-	a.appendActivity("facts", "Runtime facts updated", detail, false)
-	return false
-}
-
 // runtimeEventDecisionMadeHandler 处理 decision_made 事件，输出最终裁决摘要。
 func runtimeEventDecisionMadeHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.DecisionMadePayload)
@@ -3933,22 +3929,6 @@ func runtimeEventDecisionMadeHandler(a *App, event tuiservices.RuntimeEvent) boo
 	if shouldRenderDecisionBlock {
 		a.appendInlineMessage(roleSystem, formatDecisionBlockMessage(payload))
 	}
-	return false
-}
-
-// runtimeEventSubAgentSnapshotUpdatedHandler 处理 subagent_snapshot_updated 事件，输出聚合计数。
-func runtimeEventSubAgentSnapshotUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
-	payload, ok := event.Payload.(tuiservices.SubAgentSnapshotUpdatedPayload)
-	if !ok {
-		return false
-	}
-	detail := fmt.Sprintf(
-		"started=%d completed=%d failed=%d",
-		payload.SubAgent.StartedCount,
-		payload.SubAgent.CompletedCount,
-		payload.SubAgent.FailedCount,
-	)
-	a.appendActivity("subagent", "SubAgent snapshot updated", detail, false)
 	return false
 }
 

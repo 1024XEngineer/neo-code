@@ -14,6 +14,7 @@ func TestRuntimeHookPointUserAllowedMatchesConfigValidation(t *testing.T) {
 		runtimehooks.HookPointBeforeToolCall,
 		runtimehooks.HookPointAfterToolResult,
 		runtimehooks.HookPointBeforeCompletionDecision,
+		runtimehooks.HookPointAcceptGate,
 		runtimehooks.HookPointBeforePermissionDecision,
 		runtimehooks.HookPointAfterToolFailure,
 		runtimehooks.HookPointSessionStart,

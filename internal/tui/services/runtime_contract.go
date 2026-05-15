@@ -308,8 +308,10 @@ const (
 	StopReasonAccepted StopReason = "accepted"
 	// StopReasonEmptyResponse 表示模型连续返回空文本响应。
 	StopReasonEmptyResponse StopReason = "empty_response"
-	// StopReasonAcceptCheckFailed 表示最终 Accept Gate 的验收项失败。
-	StopReasonAcceptCheckFailed StopReason = "accept_check_failed"
+	// StopReasonAcceptContinue 表示验收流程要求模型继续工作。
+	StopReasonAcceptContinue StopReason = "accept_continue"
+	// StopReasonAcceptContinueExhausted 表示验收继续次数已耗尽。
+	StopReasonAcceptContinueExhausted StopReason = "accept_continue_exhausted"
 	// StopReasonTodoNotConverged 表示 required todo 未收敛。
 	StopReasonTodoNotConverged StopReason = "todo_not_converged"
 	// StopReasonTodoWaitingExternal 表示 todo 等待外部输入。
@@ -439,7 +441,6 @@ type RuntimeSnapshot struct {
 	TaskKind  string           `json:"task_kind,omitempty"`
 	UpdatedAt time.Time        `json:"updated_at"`
 	Todos     TodoSnapshot     `json:"todos"`
-	Facts     FactsSnapshot    `json:"facts"`
 	Decision  DecisionSnapshot `json:"decision,omitempty"`
 	SubAgents SubAgentSnapshot `json:"subagents,omitempty"`
 }
@@ -448,11 +449,6 @@ type RuntimeSnapshot struct {
 type TodoSnapshot struct {
 	Items   []TodoViewItem `json:"items,omitempty"`
 	Summary TodoSummary    `json:"summary,omitempty"`
-}
-
-// FactsSnapshot 描述统一事实快照。
-type FactsSnapshot struct {
-	RuntimeFacts map[string]any `json:"runtime_facts"`
 }
 
 // DecisionSnapshot 描述最终裁决快照。
@@ -465,7 +461,7 @@ type DecisionSnapshot struct {
 	InternalSummary     string           `json:"internal_summary,omitempty"`
 }
 
-// SubAgentSnapshot 描述子代理事实聚合快照。
+// SubAgentSnapshot 描述当前 run 内的子代理聚合计数。
 type SubAgentSnapshot struct {
 	StartedCount   int `json:"started_count"`
 	CompletedCount int `json:"completed_count"`
@@ -476,12 +472,6 @@ type SubAgentSnapshot struct {
 type RuntimeSnapshotUpdatedPayload struct {
 	Reason   string          `json:"reason,omitempty"`
 	Snapshot RuntimeSnapshot `json:"snapshot"`
-}
-
-// FactsUpdatedPayload 描述 facts_updated 事件。
-type FactsUpdatedPayload struct {
-	Reason string        `json:"reason,omitempty"`
-	Facts  FactsSnapshot `json:"facts"`
 }
 
 // DecisionMadePayload 描述 decision_made 事件。
@@ -730,8 +720,7 @@ const (
 	EventSubAgentToolCallResult     EventType = "subagent_tool_call_result"
 	EventSubAgentToolCallDenied     EventType = "subagent_tool_call_denied"
 	EventRuntimeSnapshotUpdated     EventType = "runtime_snapshot_updated"
-	EventFactsUpdated               EventType = "facts_updated"
-	EventDecisionMade               EventType = "decision_made"
 	EventSubAgentSnapshotUpdated    EventType = "subagent_snapshot_updated"
+	EventDecisionMade               EventType = "decision_made"
 	EventTodoSnapshotUpdated        EventType = "todo_snapshot_updated"
 )

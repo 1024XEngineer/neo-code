@@ -6,43 +6,8 @@ import (
 	"testing"
 	"time"
 
-	runtimefacts "neo-code/internal/runtime/facts"
 	agentsession "neo-code/internal/session"
 )
-
-func TestEmitSubAgentSnapshotUpdatedEmitsAggregatedCounts(t *testing.T) {
-	t.Parallel()
-
-	service := &Service{events: make(chan RuntimeEvent, 2)}
-	state := newRunState("run-subagent-snapshot", newRuntimeSession("session-subagent-snapshot"))
-	collector := runtimefacts.NewCollector()
-	collector.ApplySubAgentStarted(runtimefacts.SubAgentFact{TaskID: "agent-1", Role: "task"})
-	collector.ApplySubAgentFinished(runtimefacts.SubAgentFact{TaskID: "agent-1", Artifacts: []string{"a.txt"}}, true)
-	collector.ApplySubAgentStarted(runtimefacts.SubAgentFact{TaskID: "agent-2", Role: "task"})
-	collector.ApplySubAgentFinished(runtimefacts.SubAgentFact{TaskID: "agent-2", StopReason: "tool_error"}, false)
-	state.factsCollector = collector
-
-	service.emitSubAgentSnapshotUpdated(&state, "tool_result")
-
-	select {
-	case evt := <-service.events:
-		if evt.Type != EventSubAgentSnapshotUpdated {
-			t.Fatalf("event type = %q, want %q", evt.Type, EventSubAgentSnapshotUpdated)
-		}
-		payload, ok := evt.Payload.(SubAgentSnapshotUpdatedPayload)
-		if !ok {
-			t.Fatalf("payload type = %T, want SubAgentSnapshotUpdatedPayload", evt.Payload)
-		}
-		if payload.Reason != "tool_result" {
-			t.Fatalf("reason = %q, want tool_result", payload.Reason)
-		}
-		if payload.SubAgent.StartedCount != 2 || payload.SubAgent.CompletedCount != 1 || payload.SubAgent.FailedCount != 1 {
-			t.Fatalf("unexpected subagent counts: %+v", payload.SubAgent)
-		}
-	default:
-		t.Fatal("expected subagent snapshot event")
-	}
-}
 
 func TestGetRuntimeSnapshotBranches(t *testing.T) {
 	t.Parallel()
@@ -79,7 +44,20 @@ func TestGetRuntimeSnapshotBranches(t *testing.T) {
 	if got.SessionID != session.ID {
 		t.Fatalf("session id = %q, want %q", got.SessionID, session.ID)
 	}
-	if got.Facts.RuntimeFacts.Progress.ObservedFactCount != 0 {
-		t.Fatalf("unexpected facts snapshot: %+v", got.Facts.RuntimeFacts)
+	if got.Todos.Summary.Total != 0 {
+		t.Fatalf("unexpected todos snapshot: %+v", got.Todos)
+	}
+}
+
+func TestBuildRuntimeSnapshotCarriesIndependentSubAgentCounts(t *testing.T) {
+	t.Parallel()
+
+	state := newRunState("run-subagent", newRuntimeSession("session-subagent"))
+	state.subAgentSnapshot.started = map[string]struct{}{"task-1:coder": {}}
+	state.subAgentSnapshot.completed = map[string]struct{}{"task-1": {}}
+
+	got := buildRuntimeSnapshot(&state)
+	if got.SubAgents.StartedCount != 1 || got.SubAgents.CompletedCount != 1 || got.SubAgents.FailedCount != 0 {
+		t.Fatalf("subagent snapshot = %+v", got.SubAgents)
 	}
 }

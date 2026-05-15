@@ -159,13 +159,11 @@ func TestDefaultBuilderBuildIncludesPlanSections(t *testing.T) {
 				Goal:        "引入 plan/build 模式",
 				Steps:       []string{"扩展 session", "扩展 runtime"},
 				Constraints: []string{"保持 tools 边界"},
-				Verify:      acceptText("go test ./internal/..."),
 			},
 			Summary: agentsession.SummaryView{
 				Goal:          "引入 plan/build 模式",
 				KeySteps:      []string{"扩展 session", "扩展 runtime"},
 				Constraints:   []string{"保持 tools 边界"},
-				Verify:        acceptText("go test ./internal/..."),
 				ActiveTodoIDs: []string{"todo-1"},
 			},
 		},

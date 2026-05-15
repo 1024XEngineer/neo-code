@@ -18,11 +18,10 @@ const (
 )
 
 type summaryCandidate struct {
-	Goal          string                    `json:"goal"`
-	KeySteps      []string                  `json:"key_steps"`
-	Constraints   []string                  `json:"constraints"`
-	Verify        agentsession.AcceptChecks `json:"verify"`
-	ActiveTodoIDs []string                  `json:"active_todo_ids"`
+	Goal          string   `json:"goal"`
+	KeySteps      []string `json:"key_steps"`
+	Constraints   []string `json:"constraints"`
+	ActiveTodoIDs []string `json:"active_todo_ids"`
 }
 
 type planTurnOutput struct {
@@ -102,8 +101,7 @@ func planningNeedsFullPlan(state *runState) bool {
 
 func summaryViewUsable(summary agentsession.SummaryView) bool {
 	return strings.TrimSpace(summary.Goal) != "" &&
-		len(summary.KeySteps) > 0 &&
-		len(summary.Verify) > 0
+		(len(summary.KeySteps) > 0 || len(summary.ActiveTodoIDs) > 0)
 }
 
 func normalizeSummaryCandidate(candidate summaryCandidate) agentsession.SummaryView {
@@ -111,7 +109,6 @@ func normalizeSummaryCandidate(candidate summaryCandidate) agentsession.SummaryV
 		Goal:          strings.TrimSpace(candidate.Goal),
 		KeySteps:      append([]string(nil), candidate.KeySteps...),
 		Constraints:   append([]string(nil), candidate.Constraints...),
-		Verify:        candidate.Verify.Clone(),
 		ActiveTodoIDs: append([]string(nil), candidate.ActiveTodoIDs...),
 	}
 }

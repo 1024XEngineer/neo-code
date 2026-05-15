@@ -765,7 +765,6 @@ type RuntimeSnapshot struct {
 	TaskKind            string                       `json:"task_kind,omitempty"`
 	UpdatedAt           time.Time                    `json:"updated_at"`
 	Todos               TodoSnapshot                 `json:"todos"`
-	Facts               map[string]any               `json:"facts,omitempty"`
 	Decision            map[string]any               `json:"decision,omitempty"`
 	SubAgents           map[string]any               `json:"subagents,omitempty"`
 	PendingUserQuestion *PendingUserQuestionSnapshot `json:"pending_user_question,omitempty"`

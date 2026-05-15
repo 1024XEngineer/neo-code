@@ -255,12 +255,10 @@ func restoreRuntimePayload(eventType EventType, payload any) (any, error) {
 		return decodeRuntimePayload[SubAgentToolCallEventPayload](payload)
 	case EventRuntimeSnapshotUpdated:
 		return decodeRuntimePayload[RuntimeSnapshotUpdatedPayload](payload)
-	case EventFactsUpdated:
-		return decodeRuntimePayload[FactsUpdatedPayload](payload)
-	case EventDecisionMade:
-		return decodeRuntimePayload[DecisionMadePayload](payload)
 	case EventSubAgentSnapshotUpdated:
 		return decodeRuntimePayload[SubAgentSnapshotUpdatedPayload](payload)
+	case EventDecisionMade:
+		return decodeRuntimePayload[DecisionMadePayload](payload)
 	case EventType(RuntimeEventRunContext):
 		return decodeRuntimePayload[RuntimeRunContextPayload](payload)
 	case EventType(RuntimeEventToolStatus):

@@ -105,7 +105,7 @@ func TestRuntimeHooksConfigValidateRejectsExternalKindsWithP6LiteMessage(t *test
 		DefaultTimeoutSec:    2,
 		DefaultFailurePolicy: runtimeHookFailurePolicyWarnOnly,
 	}
-	externalKinds := []string{"command", "prompt", "agent"}
+	externalKinds := []string{"prompt", "agent"}
 	for _, kind := range externalKinds {
 		kind := kind
 		t.Run(kind, func(t *testing.T) {
@@ -126,10 +126,36 @@ func TestRuntimeHooksConfigValidateRejectsExternalKindsWithP6LiteMessage(t *test
 			if err == nil {
 				t.Fatalf("expected external kind %q to be rejected", kind)
 			}
-			if !strings.Contains(err.Error(), "not supported in P6-lite") {
-				t.Fatalf("error=%q, want contains not supported in P6-lite", err.Error())
+			if !strings.Contains(err.Error(), "not supported in current stage") {
+				t.Fatalf("error=%q, want contains not supported in current stage", err.Error())
 			}
 		})
+	}
+}
+
+func TestRuntimeHooksConfigValidateAllowsCommand(t *testing.T) {
+	t.Parallel()
+
+	cfg := RuntimeHooksConfig{
+		Enabled:              boolPtr(true),
+		UserHooksEnabled:     boolPtr(true),
+		DefaultTimeoutSec:    2,
+		DefaultFailurePolicy: runtimeHookFailurePolicyWarnOnly,
+		Items: []RuntimeHookItemConfig{
+			{
+				ID:            "accept-command",
+				Point:         runtimeHookPointAcceptGate,
+				Scope:         runtimeHookScopeUser,
+				Kind:          runtimeHookKindCommand,
+				Mode:          runtimeHookModeSync,
+				TimeoutSec:    2,
+				FailurePolicy: runtimeHookFailurePolicyWarnOnly,
+				Params:        map[string]any{"command": "echo ok"},
+			},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"time"
 
-	runtimefacts "neo-code/internal/runtime/facts"
 	agentsession "neo-code/internal/session"
 )
 
@@ -24,9 +23,6 @@ func (s *Service) resetTodosForUserRun(ctx context.Context, state *runState) err
 	}
 	state.session.Todos = nextTodos
 	state.session.UpdatedAt = time.Now()
-	if state.factsCollector != nil {
-		state.factsCollector.ApplyTodoSnapshot(todoSummaryLikeForItems(nextTodos))
-	}
 	sessionSnapshot := cloneSessionForPersistence(state.session)
 	state.mu.Unlock()
 
@@ -61,24 +57,4 @@ func shouldResetTodosForUserRun(session agentsession.Session) bool {
 	default:
 		return true
 	}
-}
-
-// todoSummaryLikeForItems 将保留后的 todo 列表压缩成事实层需要的计数。
-func todoSummaryLikeForItems(items []agentsession.TodoItem) runtimefacts.TodoSummaryLike {
-	var summary runtimefacts.TodoSummaryLike
-	for _, item := range items {
-		if !item.RequiredValue() {
-			continue
-		}
-		if item.Status.IsTerminal() {
-			if item.Status == agentsession.TodoStatusFailed {
-				summary.RequiredFailed++
-			} else {
-				summary.RequiredCompleted++
-			}
-			continue
-		}
-		summary.RequiredOpen++
-	}
-	return summary
 }

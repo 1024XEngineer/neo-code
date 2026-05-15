@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -22,6 +24,7 @@ import (
 
 const (
 	configuredHookKindBuiltin = "builtin"
+	configuredHookKindCommand = "command"
 	configuredHookKindHTTP    = "http"
 	configuredHookModeSync    = "sync"
 	configuredHookModeObserve = "observe"
@@ -208,6 +211,10 @@ func buildConfiguredHookSpec(
 		handler, err = buildUserBuiltinHookHandler(strings.TrimSpace(item.Handler), item.Params, defaultWorkdir)
 		specKind = runtimehooks.HookKindFunction
 		specMode = runtimehooks.HookModeSync
+	case configuredHookKindCommand:
+		handler, err = buildUserCommandHookHandler(item.Params, defaultWorkdir)
+		specKind = runtimehooks.HookKindCommand
+		specMode = runtimehooks.HookModeSync
 	case configuredHookKindHTTP:
 		handler, err = buildUserHTTPObserveHookHandler(item)
 		specKind = runtimehooks.HookKindHTTP
@@ -247,6 +254,13 @@ func validateConfiguredHookItemForP6Lite(item config.RuntimeHookItemConfig, scop
 		if mode != configuredHookModeSync {
 			return fmt.Errorf("mode %q is not supported", item.Mode)
 		}
+	case configuredHookKindCommand:
+		if mode != configuredHookModeSync {
+			return fmt.Errorf("mode %q is not supported for kind command (only sync)", item.Mode)
+		}
+		if strings.TrimSpace(readHookParamString(item.Params, "command")) == "" {
+			return fmt.Errorf("kind command requires params.command")
+		}
 	case configuredHookKindHTTP:
 		if mode != configuredHookModeObserve {
 			return fmt.Errorf("mode %q is not supported for kind http (only observe)", item.Mode)
@@ -258,7 +272,7 @@ func validateConfiguredHookItemForP6Lite(item config.RuntimeHookItemConfig, scop
 	default:
 		if isExternalHookKind(kind) {
 			return fmt.Errorf(
-				"external hook kind %q is not supported in P6-lite; only builtin/http-observe hooks are enabled",
+				"external hook kind %q is not supported in current stage; only builtin/command/http-observe hooks are enabled",
 				item.Kind,
 			)
 		}
@@ -362,6 +376,49 @@ func buildUserBuiltinHookHandler(
 	default:
 		return nil, fmt.Errorf("unsupported user builtin handler %q", handlerName)
 	}
+}
+
+// buildUserCommandHookHandler 将命令型 hook 转为同步阻断处理器，并通过 stdin 传入上下文 JSON。
+func buildUserCommandHookHandler(params map[string]any, defaultWorkdir string) (runtimehooks.HookHandler, error) {
+	command := strings.TrimSpace(readHookParamString(params, "command"))
+	if command == "" {
+		return nil, fmt.Errorf("kind command requires params.command")
+	}
+	return func(ctx context.Context, input runtimehooks.HookContext) runtimehooks.HookResult {
+		workdir := resolveHookWorkdir(input, defaultWorkdir)
+		cmd := buildCommandHookProcess(ctx, command)
+		if strings.TrimSpace(workdir) != "" {
+			cmd.Dir = workdir
+		}
+		payload, err := json.Marshal(input)
+		if err != nil {
+			detail := fmt.Sprintf("command hook marshal input failed: %v", err)
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultFailed, Message: detail, Error: detail}
+		}
+		cmd.Stdin = bytes.NewReader(payload)
+		output, err := cmd.CombinedOutput()
+		message := strings.TrimSpace(string(output))
+		if err == nil {
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass, Message: message}
+		}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultBlock, Message: message}
+		}
+		detail := strings.TrimSpace(message)
+		if detail == "" {
+			detail = err.Error()
+		}
+		return runtimehooks.HookResult{Status: runtimehooks.HookResultFailed, Message: detail, Error: err.Error()}
+	}, nil
+}
+
+// buildCommandHookProcess 以当前平台的 shell 执行用户命令，保留脚本组合能力。
+func buildCommandHookProcess(ctx context.Context, command string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		return exec.CommandContext(ctx, "powershell", "-Command", command)
+	}
+	return exec.CommandContext(ctx, "sh", "-c", command)
 }
 
 // buildUserHTTPObserveHookHandler 将 kind=http 的 observe 配置转换为观测回调处理器。

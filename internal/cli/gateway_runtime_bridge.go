@@ -1737,9 +1737,6 @@ func convertRuntimeSnapshot(snapshot agentruntime.RuntimeSnapshot) gateway.Runti
 		Phase:     strings.TrimSpace(snapshot.Phase),
 		UpdatedAt: snapshot.UpdatedAt,
 		Todos:     convertRuntimeTodoSnapshot(snapshot.Todos),
-		Facts: map[string]any{
-			"runtime_facts": snapshot.Facts.RuntimeFacts,
-		},
 		Decision: map[string]any{
 			"status":      strings.TrimSpace(snapshot.Decision.Status),
 			"stop_reason": strings.TrimSpace(snapshot.Decision.StopReason),

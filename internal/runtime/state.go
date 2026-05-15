@@ -6,7 +6,6 @@ import (
 
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/controlplane"
-	runtimefacts "neo-code/internal/runtime/facts"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
 )
@@ -38,8 +37,8 @@ type runState struct {
 	maxTurnsLimit             int
 	userGoal                  string
 	pendingSystemReminder     string
+	acceptanceContinueCount   int
 	toolTimeoutBackoff        map[string]int
-	factsCollector            *runtimefacts.Collector
 	terminalStatus            controlplane.TerminalStatus
 	terminalStopReason        controlplane.StopReason
 	terminalStopDetail        string
@@ -50,6 +49,8 @@ type runState struct {
 	lastEndOfTurnCheckpointID string
 	runCheckpointID           string
 	hasRunWorkspaceWrite      bool
+	recentToolSummary         []hookToolSummaryItem
+	subAgentSnapshot          subAgentSnapshotState
 	hookAnnotations           []string
 	hookNotifications         []queuedHookNotification
 	hookNotificationSeen      map[string]time.Time
@@ -68,7 +69,6 @@ func newRunState(runID string, session agentsession.Session) runState {
 		nextAttemptSeq:        1,
 		completion:            controlplane.CompletionState{TodoOnlyTaskCandidate: true},
 		reportedMissingSkills: make(map[string]struct{}),
-		factsCollector:        runtimefacts.NewCollector(),
 		hookNotificationSeen:  make(map[string]time.Time),
 		toolTimeoutBackoff:    make(map[string]int),
 	}

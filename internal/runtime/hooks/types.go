@@ -16,6 +16,8 @@ const (
 	HookPointAfterToolResult HookPoint = "after_tool_result"
 	// HookPointBeforeCompletionDecision 表示完成决策前挂点。
 	HookPointBeforeCompletionDecision HookPoint = "before_completion_decision"
+	// HookPointAcceptGate 表示最终收尾前的用户验收挂点。
+	HookPointAcceptGate HookPoint = "accept_gate"
 	// HookPointBeforePermissionDecision 表示权限决策前挂点。
 	HookPointBeforePermissionDecision HookPoint = "before_permission_decision"
 	// HookPointAfterToolFailure 表示工具失败后挂点。
@@ -48,6 +50,7 @@ var hookPointCapabilities = map[HookPoint]HookPointCapability{
 	HookPointBeforeToolCall:           {CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
 	HookPointAfterToolResult:          {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
 	HookPointBeforeCompletionDecision: {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
+	HookPointAcceptGate:               {CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
 	HookPointBeforePermissionDecision: {CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: false},
 	HookPointAfterToolFailure:         {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
 	HookPointSessionStart:             {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
@@ -176,7 +179,7 @@ func (s HookSpec) normalizeAndValidate() (HookSpec, error) {
 		s.Kind = HookKindFunction
 	}
 	switch s.Kind {
-	case HookKindFunction, HookKindHTTP:
+	case HookKindFunction, HookKindCommand, HookKindHTTP:
 	default:
 		return HookSpec{}, wrapInvalidSpec("kind %q is not supported in current stage", s.Kind)
 	}

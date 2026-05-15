@@ -29,9 +29,10 @@ import (
 var selfHealingRepeatReminder = promptasset.RepeatCycleReminder()
 
 const (
-	usageSourceObserved  = "observed"
-	usageSourceEstimated = "estimated"
-	usageSourceUnknown   = "unknown"
+	usageSourceObserved    = "observed"
+	usageSourceEstimated   = "estimated"
+	usageSourceUnknown     = "unknown"
+	maxAcceptanceContinues = 3
 )
 
 // computeToolSignature 计算单轮执行的工具签名，用于循环检测。
@@ -384,25 +385,35 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				}
 
 				assistantText := strings.TrimSpace(partsrender.RenderDisplayParts(turnOutput.assistant.Parts))
-				hasThinking := len(turnOutput.assistant.ThinkingMetadata) > 0
-
-				if assistantText == "" {
-					if hasThinking {
-						break turnAttempt
-					}
-					state.markTerminalDecision(
-						controlplane.TerminalStatusIncomplete,
-						controlplane.StopReasonEmptyResponse,
-						"assistant returned empty text without tool calls",
-					)
-					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
-					return nil
-				}
 
 				if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 					return s.handleRunError(err)
 				}
 				s.updateResumeCheckpoint(ctx, &state, "verify", "completed")
+
+				if state.shouldRunAcceptGateHook() {
+					hookOutput := s.runHookPoint(ctx, &state, runtimehooks.HookPointAcceptGate, runtimehooks.HookContext{
+						Metadata: buildAcceptGateHookMetadata(&state, assistantText),
+					})
+					if hookOutput.Blocked {
+						reason := findHookBlockMessage(hookOutput)
+						s.emitRunScoped(ctx, EventHookBlocked, &state, HookBlockedPayload{
+							HookID:   strings.TrimSpace(hookOutput.BlockedBy),
+							Source:   string(findHookBlockSource(hookOutput)),
+							Point:    string(runtimehooks.HookPointAcceptGate),
+							Reason:   reason,
+							Enforced: true,
+						})
+						report := continuedAcceptGateReport(reason)
+						s.emitAcceptGateReport(&state, report)
+						if s.handleAcceptanceContinue(ctx, &state, report) {
+							break turnAttempt
+						}
+						s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
+						return nil
+					}
+				}
+
 				report := s.evaluateAcceptGate(ctx, &state, turnOutput.assistant)
 				s.emitAcceptGateReport(&state, report)
 
@@ -423,6 +434,13 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					s.triggerMemoExtraction(state.session.ID, runBoundaryMessagesForMemo(&state), state.rememberedThisRun)
 
+					return nil
+				}
+				if report.Outcome == acceptgate.OutcomeContinue {
+					if s.handleAcceptanceContinue(ctx, &state, report) {
+						break turnAttempt
+					}
+					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					return nil
 				}
 				if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
@@ -454,6 +472,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				state.hasRunWorkspaceWrite = true
 				state.mu.Unlock()
 			}
+			state.recordRecentToolSummary(summary)
 
 			state.mu.Lock()
 			state.completion = applyToolExecutionCompletion(state.completion, summary)

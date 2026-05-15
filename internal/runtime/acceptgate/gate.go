@@ -6,46 +6,44 @@ import (
 	"strings"
 
 	"neo-code/internal/runtime/controlplane"
-	runtimefacts "neo-code/internal/runtime/facts"
 	agentsession "neo-code/internal/session"
 )
 
-// Outcome 表示 Accept Gate 的二元终态结果。
+// Outcome 表示 Accept Gate 的系统预检结果。
 type Outcome string
 
 const (
-	// OutcomeAccepted 表示所有必需验收项均已满足。
+	// OutcomeAccepted 表示系统预检已通过。
 	OutcomeAccepted Outcome = "accepted"
-	// OutcomeFailed 表示至少一个必需验收项缺少运行期证据或状态未收敛。
+	// OutcomeContinue 表示存在可恢复问题，应提示模型继续工作。
+	OutcomeContinue Outcome = "continued"
+	// OutcomeFailed 表示存在不可恢复问题，应终止本轮。
 	OutcomeFailed Outcome = "failed"
 )
 
-// Input 汇总最终验收所需的运行期事实和 plan 状态。
+// Input 汇总系统预检所需的最小运行态。
 type Input struct {
-	PlanVerify        agentsession.AcceptChecks
-	Facts             runtimefacts.RuntimeFacts
 	Todos             []agentsession.TodoItem
 	LastAssistantText string
 }
 
-// CheckResult 描述单个验收项的判定结果。
+// CheckResult 描述单个系统预检项的判定结果。
 type CheckResult struct {
 	Passed bool   `json:"passed"`
 	Name   string `json:"name"`
-	Kind   string `json:"kind,omitempty"`
-	Target string `json:"target,omitempty"`
 	Reason string `json:"reason,omitempty"`
 }
 
 // Report 描述 Accept Gate 的完整判定报告。
 type Report struct {
-	Outcome    Outcome                 `json:"status"`
-	StopReason controlplane.StopReason `json:"stop_reason,omitempty"`
-	Summary    string                  `json:"summary,omitempty"`
-	Results    []CheckResult           `json:"results,omitempty"`
+	Outcome      Outcome                 `json:"status"`
+	StopReason   controlplane.StopReason `json:"stop_reason,omitempty"`
+	Summary      string                  `json:"summary,omitempty"`
+	ContinueHint string                  `json:"continue_hint,omitempty"`
+	Results      []CheckResult           `json:"results,omitempty"`
 }
 
-// Evaluate 按固定顺序检查 plan-owned todo 与 Plan.Verify 运行期证据。
+// Evaluate 执行收尾前的系统预检，只处理框架级状态，不再承担内容正确性验证。
 func Evaluate(ctx context.Context, input Input) Report {
 	if err := ctx.Err(); err != nil {
 		return Report{
@@ -59,27 +57,14 @@ func Evaluate(ctx context.Context, input Input) Report {
 		Outcome:    OutcomeAccepted,
 		StopReason: controlplane.StopReasonAccepted,
 	}
-
+	report.add(checkOutputOnly(input.LastAssistantText))
 	report.add(checkRequiredTodoFailures(input.Todos))
 	report.add(checkRequiredTodoConvergence(input.Todos))
-
-	checks := input.PlanVerify.Normalize()
-	if len(checks) == 0 {
-		checks = agentsession.AcceptChecks{{Kind: agentsession.AcceptCheckOutputOnly}}
-	}
-	for _, check := range checks {
-		result := evaluateAcceptCheck(input, check)
-		if !check.RequiredValue() {
-			report.addOptional(result)
-			continue
-		}
-		report.add(result)
-	}
 	report.finalize()
 	return report
 }
 
-// add 记录必需验收项结果，并在失败时更新终态原因。
+// add 记录系统预检结果，并按可恢复性更新终态。
 func (r *Report) add(result CheckResult) {
 	if strings.TrimSpace(result.Name) == "" {
 		return
@@ -88,38 +73,31 @@ func (r *Report) add(result CheckResult) {
 	if result.Passed {
 		return
 	}
-	r.Outcome = OutcomeFailed
 	switch result.Name {
 	case "required_todo_failed":
+		r.Outcome = OutcomeFailed
 		r.StopReason = controlplane.StopReasonRequiredTodoFailed
+	case "output_only":
+		if r.Outcome != OutcomeFailed {
+			r.Outcome = OutcomeContinue
+			r.StopReason = controlplane.StopReasonAcceptContinue
+			r.ContinueHint = "你刚才没有给出可见回复，请继续完成任务并给出明确结果。"
+		}
 	case "required_todo_convergence":
-		if r.StopReason != controlplane.StopReasonRequiredTodoFailed {
-			r.StopReason = controlplane.StopReasonTodoNotConverged
-		}
-	default:
-		if r.StopReason == "" || r.StopReason == controlplane.StopReasonAccepted {
-			r.StopReason = controlplane.StopReasonAcceptCheckFailed
+		if r.Outcome != OutcomeFailed {
+			r.Outcome = OutcomeContinue
+			r.StopReason = controlplane.StopReasonAcceptContinue
+			r.ContinueHint = "仍有 required todo 未完成，请继续处理后再结束。"
 		}
 	}
 }
 
-// addOptional 保留可选验收项结果，但不让可选失败改变终态。
-func (r *Report) addOptional(result CheckResult) {
-	if strings.TrimSpace(result.Name) == "" {
-		return
-	}
-	r.Results = append(r.Results, result)
-}
-
-// finalize 汇总逐项失败原因，形成对上层展示稳定的终态摘要。
+// finalize 汇总失败原因，形成对上层展示稳定的判定摘要。
 func (r *Report) finalize() {
 	if r.Outcome == OutcomeAccepted {
 		r.StopReason = controlplane.StopReasonAccepted
-		r.Summary = "acceptance checks passed"
+		r.Summary = "acceptance prechecks passed"
 		return
-	}
-	if r.StopReason == "" || r.StopReason == controlplane.StopReasonAccepted {
-		r.StopReason = controlplane.StopReasonAcceptCheckFailed
 	}
 	failures := make([]string, 0, len(r.Results))
 	for _, result := range r.Results {
