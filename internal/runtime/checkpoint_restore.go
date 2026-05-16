@@ -372,6 +372,10 @@ func (s *Service) restoreCheckpointBaseline(
 		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: create baseline guard: %w", guardErr)
 	}
 	if err := s.perEditStore.RestoreBaseline(ctx, perEditID, relPaths); err != nil {
+		if guardWritten {
+			_ = s.perEditStore.DeleteCheckpoint(guardID)
+		}
+		_ = s.checkpointStore.UpdateCheckpointStatus(ctx, guardRecord.CheckpointID, agentsession.CheckpointStatusBroken)
 		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: baseline restore code: %w", err)
 	}
 	return RestoreResult{CheckpointID: checkpointID, SessionID: sessionID}, guardRecord, nil

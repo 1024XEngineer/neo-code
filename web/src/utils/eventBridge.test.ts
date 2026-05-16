@@ -1146,9 +1146,9 @@ describe("eventBridge", () => {
     expect(loadSession).not.toHaveBeenCalled();
     expect(useUIStore.getState().isRestoringCheckpoint).toBe(false);
     expect(useUIStore.getState().checkpointRollbackUndo).toBeNull();
-    expect(useUIStore.getState().fileChanges.map((entry) => entry.path)).toEqual(
-      ["src/b.txt"],
-    );
+    expect(
+      useUIStore.getState().fileChanges.map((entry) => entry.path),
+    ).toEqual(["src/b.txt"]);
   });
 
   it("baseline CheckpointRestored removes all paths from rollback all events", async () => {
@@ -1502,6 +1502,64 @@ describe("eventBridge", () => {
     expect(useUIStore.getState().fileChanges).toHaveLength(0);
     expect(useUIStore.getState().toasts.at(-1)).toMatchObject({
       message: "Rollback undo completed",
+      type: "success",
+    });
+  });
+
+  it("CheckpointUndoRestore reloads session when rollback undo guard id is stale", async () => {
+    const loadSession = vi.fn(async () => ({
+      payload: {
+        id: "sess-1",
+        agent_mode: "build",
+        messages: [{ role: "assistant", content: "after normal undo" }],
+      },
+    }));
+    const api = createMockGatewayAPI({ loadSession });
+    useSessionStore.setState({ currentSessionId: "sess-1" } as any);
+    useUIStore.setState({
+      checkpointRollbackUndo: {
+        sessionId: "sess-1",
+        checkpointId: "cp-rollback",
+        guardCheckpointId: "guard-stale",
+        paths: ["src/a.txt"],
+        status: "idle",
+      },
+      fileChanges: [
+        {
+          id: "fc-1",
+          path: "src/a.txt",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+        },
+      ],
+    } as any);
+
+    handleGatewayEvent(
+      {
+        type: EventType.CheckpointUndoRestore,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.CheckpointUndoRestore,
+            payload: {
+              session_id: "sess-1",
+              guard_checkpoint_id: "guard-normal",
+            },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(loadSession).toHaveBeenCalledWith("sess-1");
+    expect(useUIStore.getState().checkpointRollbackUndo).toBeNull();
+    expect(useUIStore.getState().fileChanges).toHaveLength(0);
+    expect(useUIStore.getState().toasts.at(-1)).toMatchObject({
+      message: "Checkpoint restore undone",
       type: "success",
     });
   });
@@ -2068,9 +2126,9 @@ describe("eventBridge", () => {
     await Promise.resolve();
 
     expect(useUIStore.getState().checkpointRollbackUndo).toBeNull();
-    expect(useUIStore.getState().fileChanges.map((entry) => entry.path)).toEqual(
-      ["fresh.txt"],
-    );
+    expect(
+      useUIStore.getState().fileChanges.map((entry) => entry.path),
+    ).toEqual(["fresh.txt"]);
   });
 
   it("run-scoped checkpoint diff keeps rollback undo when no changes are returned", async () => {

@@ -484,15 +484,26 @@ function ChangesView() {
     return groups;
   }, [fileChanges]);
   const canRollbackAll = rollbackGroups.size > 0;
+  const hasMultipleRollbackGroups = rollbackGroups.size > 1;
+  const rollbackAllCheckpointID =
+    rollbackGroups.size === 1 ? rollbackGroups.keys().next().value : undefined;
+  const rollbackAllPaths = rollbackAllCheckpointID
+    ? (rollbackGroups.get(rollbackAllCheckpointID) ?? [])
+    : [];
   const rollbackAllDisabled =
-    isGenerating || isRestoringCheckpoint || !canRollbackAll;
+    isGenerating ||
+    isRestoringCheckpoint ||
+    !canRollbackAll ||
+    hasMultipleRollbackGroups;
   const rollbackAllTitle = isGenerating
     ? "Running; action is disabled"
     : isRestoringCheckpoint
       ? "Checkpoint restore in progress"
-      : canRollbackAll
-        ? "Rollback all files in this run"
-        : "No rollback checkpoint available for current file changes";
+      : hasMultipleRollbackGroups
+        ? "Cannot rollback all files from multiple rollback baselines at once"
+        : canRollbackAll
+          ? "Rollback all files in this run"
+          : "No rollback checkpoint available for current file changes";
   const activeUndo =
     checkpointRollbackUndo?.sessionId === sessionId
       ? checkpointRollbackUndo
@@ -515,18 +526,23 @@ function ChangesView() {
 
   async function handleRollbackAll() {
     setConfirmingRollbackAll(false);
-    if (!gatewayAPI || !sessionId || rollbackAllDisabled) return;
+    if (
+      !gatewayAPI ||
+      !sessionId ||
+      rollbackAllDisabled ||
+      !rollbackAllCheckpointID ||
+      rollbackAllPaths.length === 0
+    )
+      return;
 
     setRestoringCheckpoint(true);
     try {
-      for (const [checkpointID, paths] of rollbackGroups.entries()) {
-        await gatewayAPI.restoreCheckpoint({
-          session_id: sessionId,
-          checkpoint_id: checkpointID,
-          mode: "baseline",
-          paths,
-        });
-      }
+      await gatewayAPI.restoreCheckpoint({
+        session_id: sessionId,
+        checkpoint_id: rollbackAllCheckpointID,
+        mode: "baseline",
+        paths: rollbackAllPaths,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       showToast(`Restore failed: ${message}`, "error");

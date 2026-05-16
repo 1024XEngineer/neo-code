@@ -1139,7 +1139,8 @@ export function handleGatewayEvent(
           payload.session_id === useSessionStore.getState().currentSessionId
         ) {
           if (payload.mode === "baseline") {
-            const removedAllChanges = applyBaselineCheckpointRestoreEvent(payload);
+            const removedAllChanges =
+              applyBaselineCheckpointRestoreEvent(payload);
             if (removedAllChanges && payload.guard_checkpoint_id?.trim()) {
               useUIStore.getState().setCheckpointRollbackUndo({
                 sessionId: payload.session_id,
@@ -1175,7 +1176,10 @@ export function handleGatewayEvent(
           useUIStore.getState().clearCheckpointRollbackUndo();
           useUIStore.getState().clearFileChanges();
           useUIStore.getState().setRestoringCheckpoint(false);
-          if (rollbackUndo?.sessionId === payload.session_id) {
+          if (
+            rollbackUndo?.sessionId === payload.session_id &&
+            rollbackUndo.guardCheckpointId === payload.guard_checkpoint_id
+          ) {
             uiStore.showToast("Rollback undo completed", "success");
             break;
           }

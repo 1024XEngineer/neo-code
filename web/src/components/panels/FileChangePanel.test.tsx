@@ -259,6 +259,30 @@ describe("FileChangePanel", () => {
   });
 
   it("rolls back all current file changes with one baseline restore request", async () => {
+    useUIStore.setState({
+      fileChanges: [
+        {
+          id: "fc-a",
+          path: "src/a.txt",
+          status: "modified",
+          additions: 2,
+          deletions: 2,
+          checkpoint_id: "cp-1",
+          rollback_checkpoint_id: "cp-rollback-1",
+          hunks: [],
+        },
+        {
+          id: "fc-b",
+          path: "src/b.txt",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          checkpoint_id: "cp-1",
+          rollback_checkpoint_id: "cp-rollback-1",
+          hunks: [],
+        },
+      ],
+    } as never);
     render(<FileChangePanel />);
 
     fireEvent.click(screen.getByTestId("restore-all-changes"));
@@ -272,9 +296,48 @@ describe("FileChangePanel", () => {
         session_id: "sess-1",
         checkpoint_id: "cp-rollback-1",
         mode: "baseline",
-        paths: ["src/a.txt"],
+        paths: ["src/a.txt", "src/b.txt"],
       });
     });
+    expect(mockGatewayAPI.restoreCheckpoint).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not rollback all when current file changes span multiple rollback baselines", () => {
+    useUIStore.setState({
+      fileChanges: [
+        {
+          id: "fc-a",
+          path: "src/a.txt",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          checkpoint_id: "cp-1",
+          rollback_checkpoint_id: "cp-rollback-1",
+          hunks: [],
+        },
+        {
+          id: "fc-b",
+          path: "src/b.txt",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          checkpoint_id: "cp-2",
+          rollback_checkpoint_id: "cp-rollback-2",
+          hunks: [],
+        },
+      ],
+    } as never);
+
+    render(<FileChangePanel />);
+
+    const rollbackAll = screen.getByTestId("restore-all-changes");
+    expect(rollbackAll).toBeDisabled();
+    expect(rollbackAll).toHaveAttribute(
+      "title",
+      "Cannot rollback all files from multiple rollback baselines at once",
+    );
+    fireEvent.click(rollbackAll);
+    expect(mockGatewayAPI.restoreCheckpoint).not.toHaveBeenCalled();
   });
 
   it("shows file rollback undo entry and hides stale file change list", () => {
@@ -293,7 +356,9 @@ describe("FileChangePanel", () => {
     expect(screen.getByTestId("checkpoint-undo-restore")).toBeInTheDocument();
     expect(screen.getByTestId("undo-last-rollback")).toBeEnabled();
     expect(screen.queryByText("src/a.txt")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("changes-content-stack")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("changes-content-stack"),
+    ).not.toBeInTheDocument();
   });
 
   it("shows file change list after rollback undo state is cleared", () => {
@@ -315,7 +380,9 @@ describe("FileChangePanel", () => {
 
     render(<FileChangePanel />);
 
-    expect(screen.queryByTestId("checkpoint-undo-restore")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("checkpoint-undo-restore"),
+    ).not.toBeInTheDocument();
     expect(screen.getByTestId("changes-content-stack")).toBeInTheDocument();
     expect(screen.getByText("src/new.txt")).toBeInTheDocument();
   });
@@ -339,7 +406,9 @@ describe("FileChangePanel", () => {
     await waitFor(() => {
       expect(mockGatewayAPI.undoRestore).toHaveBeenCalledWith("sess-1");
     });
-    expect(useUIStore.getState().checkpointRollbackUndo?.status).toBe("undoing");
+    expect(useUIStore.getState().checkpointRollbackUndo?.status).toBe(
+      "undoing",
+    );
   });
 
   it("keeps file rollback undo entry and reports failure when undoRestore fails", async () => {
