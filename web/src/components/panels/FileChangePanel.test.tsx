@@ -20,6 +20,7 @@ const mockGatewayAPI = {
   listGitDiffFiles: vi.fn(),
   readGitDiffFile: vi.fn(),
   restoreCheckpoint: vi.fn(),
+  undoRestore: vi.fn(),
   loadSession: vi.fn(),
   listSessionTodos: vi.fn(),
   listCheckpoints: vi.fn(),
@@ -102,6 +103,12 @@ describe("FileChangePanel", () => {
         session_id: "sess-1",
       },
     });
+    mockGatewayAPI.undoRestore.mockResolvedValue({
+      payload: {
+        checkpoint_id: "cp-1",
+        session_id: "sess-1",
+      },
+    });
     mockGatewayAPI.loadSession.mockResolvedValue({
       payload: {
         id: "sess-1",
@@ -177,6 +184,8 @@ describe("FileChangePanel", () => {
       changesPanelWidth: 560,
       theme: "dark",
       isRestoringCheckpoint: false,
+      checkpointRollbackUndo: null,
+      showToast: vi.fn(),
     } as never);
   });
 
@@ -266,6 +275,123 @@ describe("FileChangePanel", () => {
         paths: ["src/a.txt"],
       });
     });
+  });
+
+  it("shows file rollback undo entry and hides stale file change list", () => {
+    useUIStore.setState({
+      checkpointRollbackUndo: {
+        sessionId: "sess-1",
+        checkpointId: "cp-restored",
+        guardCheckpointId: "guard-1",
+        paths: ["src/a.txt"],
+        status: "idle",
+      },
+    } as never);
+
+    render(<FileChangePanel />);
+
+    expect(screen.getByTestId("checkpoint-undo-restore")).toBeInTheDocument();
+    expect(screen.getByTestId("undo-last-rollback")).toBeEnabled();
+    expect(screen.queryByText("src/a.txt")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("changes-content-stack")).not.toBeInTheDocument();
+  });
+
+  it("shows file change list after rollback undo state is cleared", () => {
+    useUIStore.setState({
+      checkpointRollbackUndo: null,
+      fileChanges: [
+        {
+          id: "fc-new",
+          path: "src/new.txt",
+          status: "modified",
+          additions: 1,
+          deletions: 1,
+          checkpoint_id: "cp-new",
+          rollback_checkpoint_id: "cp-rollback-new",
+          hunks: [],
+        },
+      ],
+    } as never);
+
+    render(<FileChangePanel />);
+
+    expect(screen.queryByTestId("checkpoint-undo-restore")).not.toBeInTheDocument();
+    expect(screen.getByTestId("changes-content-stack")).toBeInTheDocument();
+    expect(screen.getByText("src/new.txt")).toBeInTheDocument();
+  });
+
+  it("calls undoRestore after confirming file rollback undo", async () => {
+    useUIStore.setState({
+      checkpointRollbackUndo: {
+        sessionId: "sess-1",
+        checkpointId: "cp-restored",
+        guardCheckpointId: "guard-1",
+        paths: ["src/a.txt"],
+        status: "idle",
+      },
+    } as never);
+
+    render(<FileChangePanel />);
+
+    fireEvent.click(screen.getByTestId("undo-last-rollback"));
+    fireEvent.click(screen.getByRole("button", { name: "Undo rollback" }));
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.undoRestore).toHaveBeenCalledWith("sess-1");
+    });
+    expect(useUIStore.getState().checkpointRollbackUndo?.status).toBe("undoing");
+  });
+
+  it("keeps file rollback undo entry and reports failure when undoRestore fails", async () => {
+    mockGatewayAPI.undoRestore.mockRejectedValue(new Error("network down"));
+    const showToast = vi.fn();
+    useUIStore.setState({
+      showToast,
+      checkpointRollbackUndo: {
+        sessionId: "sess-1",
+        checkpointId: "cp-restored",
+        guardCheckpointId: "guard-1",
+        paths: ["src/a.txt"],
+        status: "idle",
+      },
+    } as never);
+
+    render(<FileChangePanel />);
+
+    fireEvent.click(screen.getByTestId("undo-last-rollback"));
+    fireEvent.click(screen.getByRole("button", { name: "Undo rollback" }));
+
+    await waitFor(() => {
+      expect(showToast).toHaveBeenCalledWith(
+        "Undo rollback failed: network down",
+        "error",
+      );
+    });
+    expect(useUIStore.getState().checkpointRollbackUndo?.status).toBe("idle");
+    expect(screen.getByTestId("undo-last-rollback")).toBeEnabled();
+  });
+
+  it("disables file rollback undo while generating or restoring", () => {
+    useUIStore.setState({
+      checkpointRollbackUndo: {
+        sessionId: "sess-1",
+        checkpointId: "cp-restored",
+        guardCheckpointId: "guard-1",
+        paths: ["src/a.txt"],
+        status: "idle",
+      },
+    } as never);
+    useChatStore.setState({ isGenerating: true } as never);
+
+    const { rerender } = render(<FileChangePanel />);
+
+    expect(screen.getByTestId("undo-last-rollback")).toBeDisabled();
+
+    useChatStore.setState({ isGenerating: false } as never);
+    useUIStore.setState({ isRestoringCheckpoint: true } as never);
+    rerender(<FileChangePanel />);
+
+    expect(screen.getByTestId("undo-last-rollback")).toBeDisabled();
   });
 
   it("rolls back only remaining file changes after one file was already restored", async () => {

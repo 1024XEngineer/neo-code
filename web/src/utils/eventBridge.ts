@@ -162,6 +162,7 @@ function _upsertFileChange(
 ) {
   const path = normalizeFilePath(rawPath);
   if (!path) return;
+  useUIStore.getState().clearCheckpointRollbackUndo();
   const checkpointID = resolveRollbackCheckpointID(path);
   const existing = useUIStore
     .getState()
@@ -395,14 +396,14 @@ function _refreshRunFileChanges(
             change.rollback_checkpoint_id ?? change.checkpoint_id,
           ]),
       );
-      useUIStore
-        .getState()
-        .replaceFileChanges(
-          _fileChangesFromCheckpointDiff(
-            result.payload,
-            existingCheckpointByPath,
-          ),
-        );
+      const nextFileChanges = _fileChangesFromCheckpointDiff(
+        result.payload,
+        existingCheckpointByPath,
+      );
+      if (nextFileChanges.length > 0) {
+        useUIStore.getState().clearCheckpointRollbackUndo();
+      }
+      useUIStore.getState().replaceFileChanges(nextFileChanges);
     })
     .catch((error) => {
       console.warn("[eventBridge] checkpoint.diff run scope failed:", error);
@@ -410,23 +411,30 @@ function _refreshRunFileChanges(
 }
 
 // applyBaselineCheckpointRestoreEvent 只同步文件级 baseline 回退，不刷新会话消息或 insight。
-function applyBaselineCheckpointRestoreEvent(payload: CheckpointRestoredPayload) {
+function applyBaselineCheckpointRestoreEvent(
+  payload: CheckpointRestoredPayload,
+): boolean {
   const restoredPaths = new Set(
     (payload.paths ?? []).map(normalizeFilePath).filter(Boolean),
   );
   _latestRunDiffRequestId += 1;
   useUIStore.getState().setRestoringCheckpoint(false);
+  useUIStore.getState().clearCheckpointRollbackUndo();
   if (restoredPaths.size === 0) {
-    return;
+    return false;
   }
   for (const path of restoredPaths) {
     _firstTouchRollbackCheckpointByPath.delete(path);
   }
-  useUIStore.setState((state) => ({
-    fileChanges: state.fileChanges.filter(
+  let removedAllChanges = false;
+  useUIStore.setState((state) => {
+    const remaining = state.fileChanges.filter(
       (change) => !restoredPaths.has(normalizeFilePath(change.path)),
-    ),
-  }));
+    );
+    removedAllChanges = state.fileChanges.length > 0 && remaining.length === 0;
+    return { fileChanges: remaining };
+  });
+  return removedAllChanges;
 }
 
 // refreshSessionAfterCheckpointRestoreEvent 仅在当前会话收到 restore/undo 事件时刷新会话与文件变更视图。
@@ -1131,10 +1139,19 @@ export function handleGatewayEvent(
           payload.session_id === useSessionStore.getState().currentSessionId
         ) {
           if (payload.mode === "baseline") {
-            applyBaselineCheckpointRestoreEvent(payload);
+            const removedAllChanges = applyBaselineCheckpointRestoreEvent(payload);
+            if (removedAllChanges && payload.guard_checkpoint_id?.trim()) {
+              useUIStore.getState().setCheckpointRollbackUndo({
+                sessionId: payload.session_id,
+                checkpointId: payload.checkpoint_id,
+                guardCheckpointId: payload.guard_checkpoint_id,
+                paths: payload.paths ?? [],
+              });
+            }
             uiStore.showToast("File rollback completed", "success");
             break;
           }
+          useUIStore.getState().clearCheckpointRollbackUndo();
           chatStore.markAllCheckpointsRestored();
           refreshSessionAfterCheckpointRestoreEvent(
             gatewayAPI,
@@ -1154,6 +1171,14 @@ export function handleGatewayEvent(
         if (
           payload.session_id === useSessionStore.getState().currentSessionId
         ) {
+          const rollbackUndo = useUIStore.getState().checkpointRollbackUndo;
+          useUIStore.getState().clearCheckpointRollbackUndo();
+          useUIStore.getState().clearFileChanges();
+          useUIStore.getState().setRestoringCheckpoint(false);
+          if (rollbackUndo?.sessionId === payload.session_id) {
+            uiStore.showToast("Rollback undo completed", "success");
+            break;
+          }
           chatStore.markAllCheckpointsAvailable();
           refreshSessionAfterCheckpointRestoreEvent(
             gatewayAPI,

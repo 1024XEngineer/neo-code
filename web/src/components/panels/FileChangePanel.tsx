@@ -19,6 +19,7 @@ import {
   PanelRightClose,
   RefreshCw,
   RotateCcw,
+  Undo2,
   X,
 } from "lucide-react";
 import { useGatewayAPI } from "@/context/RuntimeProvider";
@@ -453,13 +454,20 @@ function ChangesView() {
   const isRestoringCheckpoint = useUIStore(
     (state) => state.isRestoringCheckpoint,
   );
+  const checkpointRollbackUndo = useUIStore(
+    (state) => state.checkpointRollbackUndo,
+  );
   const setRestoringCheckpoint = useUIStore(
     (state) => state.setRestoringCheckpoint,
+  );
+  const setCheckpointRollbackUndoStatus = useUIStore(
+    (state) => state.setCheckpointRollbackUndoStatus,
   );
   const showToast = useUIStore((state) => state.showToast);
   const fileChanges = useUIStore((state) => state.fileChanges);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [confirmingRollbackAll, setConfirmingRollbackAll] = useState(false);
+  const [confirmingUndoRestore, setConfirmingUndoRestore] = useState(false);
   const counts = useMemo(() => getChangeCounts(fileChanges), [fileChanges]);
   const rollbackGroups = useMemo(() => {
     const groups = new Map<string, string[]>();
@@ -485,6 +493,15 @@ function ChangesView() {
       : canRollbackAll
         ? "Rollback all files in this run"
         : "No rollback checkpoint available for current file changes";
+  const activeUndo =
+    checkpointRollbackUndo?.sessionId === sessionId
+      ? checkpointRollbackUndo
+      : null;
+  const undoDisabled =
+    !activeUndo ||
+    isGenerating ||
+    isRestoringCheckpoint ||
+    activeUndo.status === "undoing";
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
 
   const toggleExpanded = (id: string) => {
@@ -517,6 +534,21 @@ function ChangesView() {
     }
   }
 
+  // handleUndoRestore 只触发撤销文件回退，请求成功后的 UI 收敛由 checkpoint_undo_restore 事件负责。
+  async function handleUndoRestore() {
+    setConfirmingUndoRestore(false);
+    if (!gatewayAPI || !sessionId || undoDisabled) return;
+
+    setCheckpointRollbackUndoStatus("undoing");
+    try {
+      await gatewayAPI.undoRestore(sessionId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      showToast(`Undo rollback failed: ${message}`, "error");
+      setCheckpointRollbackUndoStatus("idle");
+    }
+  }
+
   return (
     <div style={styles.viewContainer}>
       <div style={styles.viewHeader}>
@@ -543,6 +575,43 @@ function ChangesView() {
             Rollback all
           </button>
         </div>
+        {activeUndo && (
+          <div
+            data-testid="checkpoint-undo-restore"
+            style={styles.undoRestoreBar}
+          >
+            <div style={styles.undoRestoreText}>
+              <span style={styles.undoRestoreTitle}>
+                Last rollback can be undone
+              </span>
+              <span style={styles.undoRestoreMeta}>
+                {activeUndo.paths.length} file rollback
+              </span>
+            </div>
+            <button
+              type="button"
+              data-testid="undo-last-rollback"
+              style={{
+                ...styles.actionBtn,
+                color: undoDisabled ? "var(--text-tertiary)" : "var(--accent)",
+              }}
+              disabled={undoDisabled}
+              title={
+                isGenerating || isRestoringCheckpoint
+                  ? "Running; action is disabled"
+                  : "Undo the last file rollback"
+              }
+              onClick={() => setConfirmingUndoRestore(true)}
+            >
+              {activeUndo.status === "undoing" ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <Undo2 size={13} />
+              )}
+              Undo last rollback
+            </button>
+          </div>
+        )}
         <div style={styles.summaryRow}>
           <span>{fileChanges.length} 个文件</span>
           <span style={styles.summaryDivider} />
@@ -560,7 +629,12 @@ function ChangesView() {
         data-testid="changes-scroll-area"
         style={styles.scrollArea}
       >
-        {fileChanges.length === 0 ? (
+        {activeUndo ? (
+          <div style={styles.emptyState}>
+            Rollback completed. Use Undo last rollback above to restore the
+            rolled back file changes.
+          </div>
+        ) : fileChanges.length === 0 ? (
           <div style={styles.emptyState}>当前会话暂无文件变更</div>
         ) : (
           <div data-testid="changes-content-stack" style={styles.contentStack}>
@@ -585,6 +659,17 @@ function ChangesView() {
           cancelLabel="Cancel"
           onConfirm={handleRollbackAll}
           onCancel={() => setConfirmingRollbackAll(false)}
+        />
+      )}
+      {confirmingUndoRestore && (
+        <ConfirmDialog
+          title="Undo last rollback"
+          description="Restore the files changed by the last rollback. Continue?"
+          variant="warning"
+          confirmLabel="Undo rollback"
+          cancelLabel="Cancel"
+          onConfirm={handleUndoRestore}
+          onCancel={() => setConfirmingUndoRestore(false)}
         />
       )}
     </div>
@@ -1416,6 +1501,34 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 11,
     fontFamily: "var(--font-ui)",
     flexWrap: "wrap",
+  },
+  undoRestoreBar: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginTop: 8,
+    padding: "8px 10px",
+    border: "1px solid var(--border-primary)",
+    borderRadius: 8,
+    background: "rgba(59, 130, 246, 0.08)",
+  },
+  undoRestoreText: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    minWidth: 0,
+  },
+  undoRestoreTitle: {
+    color: "var(--text-primary)",
+    fontSize: 12,
+    fontWeight: 600,
+    fontFamily: "var(--font-ui)",
+  },
+  undoRestoreMeta: {
+    color: "var(--text-tertiary)",
+    fontSize: 11,
+    fontFamily: "var(--font-mono)",
   },
   summaryWrap: {
     display: "flex",

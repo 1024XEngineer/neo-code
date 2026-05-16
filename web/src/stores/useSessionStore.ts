@@ -304,6 +304,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       chatStore.setTransitioning(true)
       chatStore.clearMessages()
       useRuntimeInsightStore.getState().reset()
+      useUIStore.getState().clearCheckpointRollbackUndo()
 
       // 2. Update session ID
       set({ currentSessionId: sessionId })
@@ -350,6 +351,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     useChatStore.getState().clearMessages()
     useRuntimeInsightStore.getState().reset()
+    useUIStore.getState().clearCheckpointRollbackUndo()
     set({ currentSessionId: '', currentProjectId: '' })
   },
 
@@ -375,6 +377,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     useChatStore.getState().clearMessages()
     useRuntimeInsightStore.getState().reset()
+    useUIStore.getState().clearCheckpointRollbackUndo()
     set({ currentSessionId: '', currentProjectId: '' })
   },
 
