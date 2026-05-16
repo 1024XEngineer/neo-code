@@ -234,6 +234,14 @@ func TestHookPointCapabilities(t *testing.T) {
 		t.Fatal("before_completion_decision should be observe-only in current runtime flow")
 	}
 
+	capability, ok = HookPointCapabilities(HookPointAcceptGate)
+	if !ok {
+		t.Fatal("expected accept_gate capability to exist")
+	}
+	if !capability.CanBlock {
+		t.Fatal("accept_gate should allow block")
+	}
+
 	if _, exists := HookPointCapabilities(HookPoint("unknown")); exists {
 		t.Fatal("unknown hook point should not have capability")
 	}

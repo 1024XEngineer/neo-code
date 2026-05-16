@@ -95,10 +95,11 @@ type VerificationFailedPayload struct {
 
 // AcceptanceDecidedPayload 描述 acceptance engine 决议结果。
 type AcceptanceDecidedPayload struct {
-	Status     string                   `json:"status"`
-	StopReason controlplane.StopReason  `json:"stop_reason,omitempty"`
-	Summary    string                   `json:"summary,omitempty"`
-	Results    []acceptgate.CheckResult `json:"results,omitempty"`
+	Status       string                   `json:"status"`
+	StopReason   controlplane.StopReason  `json:"stop_reason,omitempty"`
+	Summary      string                   `json:"summary,omitempty"`
+	ContinueHint string                   `json:"continue_hint,omitempty"`
+	Results      []acceptgate.CheckResult `json:"results,omitempty"`
 }
 
 // LedgerReconciledPayload 为账本对账预留负载。
@@ -410,12 +411,10 @@ const (
 	EventRepoHooksTrustStoreInvalid EventType = "repo_hooks_trust_store_invalid"
 	// EventRuntimeSnapshotUpdated 表示 runtime 统一状态快照已更新。
 	EventRuntimeSnapshotUpdated EventType = "runtime_snapshot_updated"
-	// EventFactsUpdated 表示运行事实快照已更新。
-	EventFactsUpdated EventType = "facts_updated"
+	// EventSubAgentSnapshotUpdated 表示子代理聚合快照已更新。
+	EventSubAgentSnapshotUpdated EventType = "subagent_snapshot_updated"
 	// EventDecisionMade 表示 FinalDecider 已输出裁决。
 	EventDecisionMade EventType = "decision_made"
-	// EventSubAgentSnapshotUpdated 表示子代理状态快照已更新。
-	EventSubAgentSnapshotUpdated EventType = "subagent_snapshot_updated"
 	// EventTodoSnapshotUpdated 表示 todo 快照已更新。
 	EventTodoSnapshotUpdated EventType = "todo_snapshot_updated"
 

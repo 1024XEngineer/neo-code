@@ -195,7 +195,8 @@ func isDirectoryGitDiffPath(workdir string, relativePath string) bool {
 
 // buildGitHeadBlobSpec 构造 HEAD blob 读取使用的对象说明。
 func buildGitHeadBlobSpec(path string) string {
-	normalized := strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(path)), "./")
+	trimmed := strings.TrimSpace(path)
+	normalized := strings.TrimPrefix(filepath.ToSlash(strings.ReplaceAll(trimmed, "\\", "/")), "./")
 	return "HEAD:" + normalized
 }
 

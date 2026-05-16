@@ -98,7 +98,9 @@ func (a App) renderFooter(width int) string {
 
 func (a App) renderHeader(width int) string {
 	status := compactStatusText(a.state.StatusText, max(18, width/3))
-	if a.state.IsAgentRunning {
+	if a.state.IsCompacting {
+		status = compactStatusText(a.state.StatusText, max(18, width/3))
+	} else if a.state.IsAgentRunning {
 		if a.runProgressKnown {
 			phaseLabel := tuiutils.Fallback(strings.TrimSpace(a.runProgressLabel), tuiutils.Fallback(status, statusRunning))
 			status = a.spinner.View() + " " + phaseLabel

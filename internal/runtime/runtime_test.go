@@ -4044,14 +4044,12 @@ func TestServiceRunPlanModeKeepsExistingPlanWhenPlanSpecIsInvalid(t *testing.T) 
 		Revision: 2,
 		Status:   agentsession.PlanStatusApproved,
 		Spec: agentsession.PlanSpec{
-			Goal:   "Keep previous plan",
-			Steps:  []string{"existing step"},
-			Verify: acceptText("existing verify"),
+			Goal:  "Keep previous plan",
+			Steps: []string{"existing step"},
 		},
 		Summary: agentsession.SummaryView{
 			Goal:     "Keep previous plan",
 			KeySteps: []string{"existing step"},
-			Verify:   acceptText("existing verify"),
 		},
 	}
 	seed.LastFullPlanRevision = 2
@@ -4271,9 +4269,8 @@ func TestServiceRunPlanModeUsesSummaryViewForAlignedPlanTurn(t *testing.T) {
 		Revision: 2,
 		Status:   agentsession.PlanStatusDraft,
 		Spec: agentsession.PlanSpec{
-			Goal:   "Keep planning aligned",
-			Steps:  []string{"summarize current plan"},
-			Verify: acceptText("go test ./internal/runtime"),
+			Goal:  "Keep planning aligned",
+			Steps: []string{"summarize current plan"},
 			Todos: []agentsession.TodoItem{
 				{ID: "todo-aligned", Content: "summarize current plan", Status: agentsession.TodoStatusPending},
 			},
@@ -4281,7 +4278,6 @@ func TestServiceRunPlanModeUsesSummaryViewForAlignedPlanTurn(t *testing.T) {
 		Summary: agentsession.SummaryView{
 			Goal:          "Keep planning aligned",
 			KeySteps:      []string{"summarize current plan"},
-			Verify:        acceptText("go test ./internal/runtime"),
 			ActiveTodoIDs: []string{"todo-aligned"},
 		},
 	}
@@ -4347,9 +4343,8 @@ func TestServiceRunBuildModeInjectsFullPlanForUnalignedExistingPlan(t *testing.T
 		Revision: 2,
 		Status:   agentsession.PlanStatusApproved,
 		Spec: agentsession.PlanSpec{
-			Goal:   "Resume build execution",
-			Steps:  []string{"resume implementation"},
-			Verify: acceptText("go test ./internal/runtime"),
+			Goal:  "Resume build execution",
+			Steps: []string{"resume implementation"},
 			Todos: []agentsession.TodoItem{
 				{ID: "todo-restored", Content: "resume implementation", Status: agentsession.TodoStatusPending},
 			},
@@ -4357,7 +4352,6 @@ func TestServiceRunBuildModeInjectsFullPlanForUnalignedExistingPlan(t *testing.T
 		Summary: agentsession.SummaryView{
 			Goal:          "Resume build execution",
 			KeySteps:      []string{"resume implementation"},
-			Verify:        acceptText("go test ./internal/runtime"),
 			ActiveTodoIDs: []string{"todo-restored"},
 		},
 	}
@@ -4413,9 +4407,8 @@ func TestServiceRunBuildModeUsesSummaryViewForAlignedExecuteTurn(t *testing.T) {
 		Revision: 3,
 		Status:   agentsession.PlanStatusApproved,
 		Spec: agentsession.PlanSpec{
-			Goal:   "Execute aligned build",
-			Steps:  []string{"continue implementation"},
-			Verify: acceptText("go test ./internal/runtime"),
+			Goal:  "Execute aligned build",
+			Steps: []string{"continue implementation"},
 			Todos: []agentsession.TodoItem{
 				{ID: "todo-build-aligned", Content: "continue implementation", Status: agentsession.TodoStatusPending},
 			},
@@ -4423,7 +4416,6 @@ func TestServiceRunBuildModeUsesSummaryViewForAlignedExecuteTurn(t *testing.T) {
 		Summary: agentsession.SummaryView{
 			Goal:          "Execute aligned build",
 			KeySteps:      []string{"continue implementation"},
-			Verify:        acceptText("go test ./internal/runtime"),
 			ActiveTodoIDs: []string{"todo-build-aligned"},
 		},
 	}
@@ -4475,9 +4467,8 @@ func TestServiceRunBuildModeInjectsFullPlanWhenSummaryIsUnusable(t *testing.T) {
 		Revision: 1,
 		Status:   agentsession.PlanStatusApproved,
 		Spec: agentsession.PlanSpec{
-			Goal:   "Follow full plan when summary is missing",
-			Steps:  []string{"review whole plan"},
-			Verify: acceptText("go test ./internal/runtime"),
+			Goal:  "Follow full plan when summary is missing",
+			Steps: []string{"review whole plan"},
 			Todos: []agentsession.TodoItem{
 				{ID: "todo-full-fallback", Content: "review whole plan", Status: agentsession.TodoStatusPending},
 			},
@@ -4532,14 +4523,12 @@ func TestServiceApproveCurrentPlanTriggersOneFullPlanAlignment(t *testing.T) {
 		Revision: 4,
 		Status:   agentsession.PlanStatusDraft,
 		Spec: agentsession.PlanSpec{
-			Goal:   "批准并执行当前计划",
-			Steps:  []string{"继续实现"},
-			Verify: acceptText("go test ./internal/runtime"),
+			Goal:  "批准并执行当前计划",
+			Steps: []string{"继续实现"},
 		},
 		Summary: agentsession.SummaryView{
 			Goal:     "批准并执行当前计划",
 			KeySteps: []string{"继续实现"},
-			Verify:   acceptText("go test ./internal/runtime"),
 		},
 	}
 	seed.LastFullPlanRevision = 4
@@ -4641,9 +4630,8 @@ func TestServiceApproveCurrentPlanTrimsSessionID(t *testing.T) {
 		Revision: 1,
 		Status:   agentsession.PlanStatusDraft,
 		Spec: agentsession.PlanSpec{
-			Goal:   "trim session id before load",
-			Steps:  []string{"step one"},
-			Verify: acceptText("verify one"),
+			Goal:  "trim session id before load",
+			Steps: []string{"step one"},
 		},
 	}
 	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(seed)); err != nil {
@@ -4681,14 +4669,12 @@ func TestServiceRunBuildModeIgnoresPlanningJSON(t *testing.T) {
 		Revision: 1,
 		Status:   agentsession.PlanStatusDraft,
 		Spec: agentsession.PlanSpec{
-			Goal:   "保持旧计划不被覆盖",
-			Steps:  []string{"旧步骤"},
-			Verify: acceptText("旧验证"),
+			Goal:  "保持旧计划不被覆盖",
+			Steps: []string{"旧步骤"},
 		},
 		Summary: agentsession.SummaryView{
 			Goal:     "保持旧计划不被覆盖",
 			KeySteps: []string{"旧步骤"},
-			Verify:   acceptText("旧验证"),
 		},
 	}
 	seed.LastFullPlanRevision = 1
@@ -4752,14 +4738,12 @@ func TestServiceRunCompletedPlanRequestsOneFinalFullReview(t *testing.T) {
 		Revision: 2,
 		Status:   agentsession.PlanStatusDraft,
 		Spec: agentsession.PlanSpec{
-			Goal:   "完成计划后仍需一次全文确认",
-			Steps:  []string{"收尾"},
-			Verify: acceptText("go test ./internal/runtime"),
+			Goal:  "完成计划后仍需一次全文确认",
+			Steps: []string{"收尾"},
 		},
 		Summary: agentsession.SummaryView{
 			Goal:     "完成计划后仍需一次全文确认",
 			KeySteps: []string{"收尾"},
-			Verify:   acceptText("go test ./internal/runtime"),
 		},
 	}
 	seed.LastFullPlanRevision = 2
@@ -4840,14 +4824,12 @@ func TestServiceCompactMarksPlanContextDirty(t *testing.T) {
 		Revision: 1,
 		Status:   agentsession.PlanStatusApproved,
 		Spec: agentsession.PlanSpec{
-			Goal:   "compact 后重对齐计划",
-			Steps:  []string{"压缩历史"},
-			Verify: acceptText("go test ./internal/runtime"),
+			Goal:  "compact 后重对齐计划",
+			Steps: []string{"压缩历史"},
 		},
 		Summary: agentsession.SummaryView{
 			Goal:     "compact 后重对齐计划",
 			KeySteps: []string{"压缩历史"},
-			Verify:   acceptText("go test ./internal/runtime"),
 		},
 	}
 	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(session)); err != nil {
@@ -4891,14 +4873,12 @@ func TestServiceRunCompactedSessionRequestsRestoreAlignment(t *testing.T) {
 		Revision: 1,
 		Status:   agentsession.PlanStatusApproved,
 		Spec: agentsession.PlanSpec{
-			Goal:   "compact 恢复后重新对齐计划",
-			Steps:  []string{"继续执行"},
-			Verify: acceptText("go test ./internal/runtime"),
+			Goal:  "compact 恢复后重新对齐计划",
+			Steps: []string{"继续执行"},
 		},
 		Summary: agentsession.SummaryView{
 			Goal:     "compact 恢复后重新对齐计划",
 			KeySteps: []string{"继续执行"},
-			Verify:   acceptText("go test ./internal/runtime"),
 		},
 	}
 	seed.LastFullPlanRevision = 1

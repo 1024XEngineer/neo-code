@@ -18,8 +18,10 @@ const (
 	StopReasonAccepted StopReason = "accepted"
 	// StopReasonEmptyResponse 表示模型返回空文本响应。
 	StopReasonEmptyResponse StopReason = "empty_response"
-	// StopReasonAcceptCheckFailed 表示最终 Accept Gate 的验收项失败。
-	StopReasonAcceptCheckFailed StopReason = "accept_check_failed"
+	// StopReasonAcceptContinue 表示验收流程要求模型继续工作。
+	StopReasonAcceptContinue StopReason = "accept_continue"
+	// StopReasonAcceptContinueExhausted 表示验收继续次数已耗尽。
+	StopReasonAcceptContinueExhausted StopReason = "accept_continue_exhausted"
 	// StopReasonTodoNotConverged 表示 required todo 尚未收敛。
 	StopReasonTodoNotConverged StopReason = "todo_not_converged"
 	// StopReasonTodoWaitingExternal 表示 required todo 仍在等待外部条件。
@@ -28,8 +30,6 @@ const (
 	StopReasonRepeatCycle StopReason = "repeat_cycle"
 	// StopReasonMaxTurnExceededWithUnconvergedTodos 表示达到最大轮次时 todo 仍未收敛。
 	StopReasonMaxTurnExceededWithUnconvergedTodos StopReason = "max_turn_exceeded_with_unconverged_todos"
-	// StopReasonMaxTurnExceededWithFailedVerification 表示达到最大轮次时 verifier 已失败。
-	StopReasonMaxTurnExceededWithFailedVerification StopReason = "max_turn_exceeded_with_failed_verification"
 	// StopReasonVerificationConfigMissing 表示 verifier 依赖的配置缺失或非法。
 	StopReasonVerificationConfigMissing StopReason = "verification_config_missing"
 	// StopReasonVerificationExecutionDenied 表示 verifier 命令被执行策略拒绝。

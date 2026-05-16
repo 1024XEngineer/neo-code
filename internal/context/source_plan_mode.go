@@ -85,12 +85,6 @@ func renderCurrentPlanSection(plan *agentsession.PlanArtifact, injectFull bool) 
 			lines = append(lines, "- "+constraint)
 		}
 	}
-	if len(plan.Summary.Verify) > 0 {
-		lines = append(lines, "verify:")
-		for _, check := range plan.Summary.Verify.RenderLines() {
-			lines = append(lines, "- "+check)
-		}
-	}
 	if len(plan.Summary.ActiveTodoIDs) > 0 {
 		lines = append(lines, "active_todo_ids:")
 		for _, todoID := range plan.Summary.ActiveTodoIDs {

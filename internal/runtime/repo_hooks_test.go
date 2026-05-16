@@ -380,10 +380,10 @@ func TestBuildRepoHookExecutorRejectsExternalKindAndDoesNotRegister(t *testing.T
 	content := `
 hooks:
   items:
-    - id: repo-external-command
+    - id: repo-external-prompt
       point: before_tool_call
       scope: repo
-      kind: command
+      kind: prompt
       mode: sync
       handler: warn_on_tool_call
       params:
@@ -412,8 +412,8 @@ hooks:
 	if err == nil {
 		t.Fatal("expected external kind in repo hook config to be rejected")
 	}
-	if !strings.Contains(err.Error(), "not supported in P6-lite") {
-		t.Fatalf("error=%q, want contains not supported in P6-lite", err.Error())
+	if !strings.Contains(err.Error(), "not supported in current stage") {
+		t.Fatalf("error=%q, want contains not supported in current stage", err.Error())
 	}
 	if exec != nil {
 		t.Fatalf("unexpected repo executor after rejection: %T", exec)
@@ -579,7 +579,7 @@ func TestValidateRepoHookItemRejectsExternalKindsWithP6LiteMessage(t *testing.T)
 		FailurePolicy: "warn_only",
 		Params:        map[string]any{"note": "x"},
 	}
-	externalKinds := []string{"command", "http", "prompt", "agent"}
+	externalKinds := []string{"http", "prompt", "agent"}
 	for _, kind := range externalKinds {
 		kind := kind
 		t.Run(kind, func(t *testing.T) {
@@ -589,8 +589,8 @@ func TestValidateRepoHookItemRejectsExternalKindsWithP6LiteMessage(t *testing.T)
 			if err == nil {
 				t.Fatalf("expected external kind %q to be rejected", kind)
 			}
-			if !strings.Contains(err.Error(), "not supported in P6-lite") {
-				t.Fatalf("error=%q, want contains not supported in P6-lite", err.Error())
+			if !strings.Contains(err.Error(), "not supported in current stage") {
+				t.Fatalf("error=%q, want contains not supported in current stage", err.Error())
 			}
 		})
 	}

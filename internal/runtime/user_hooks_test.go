@@ -1187,7 +1187,7 @@ func TestConfigureRuntimeHooksRejectsExternalKindAndDoesNotRegister(t *testing.T
 			Enabled: runtimeBoolPtr(true),
 			Point:   "before_tool_call",
 			Scope:   "user",
-			Kind:    "command",
+			Kind:    "prompt",
 			Mode:    "sync",
 			Handler: "warn_on_tool_call",
 			Params:  map[string]any{"tool_name": "bash"},
@@ -1200,8 +1200,8 @@ func TestConfigureRuntimeHooksRejectsExternalKindAndDoesNotRegister(t *testing.T
 	if err == nil {
 		t.Fatal("expected external kind to be rejected")
 	}
-	if !strings.Contains(err.Error(), "not supported in P6-lite") {
-		t.Fatalf("error=%q, want contains not supported in P6-lite", err.Error())
+	if !strings.Contains(err.Error(), "not supported in current stage") {
+		t.Fatalf("error=%q, want contains not supported in current stage", err.Error())
 	}
 	if service.hookExecutor != nil {
 		t.Fatalf("unexpected hook executor after external kind rejection: %T", service.hookExecutor)

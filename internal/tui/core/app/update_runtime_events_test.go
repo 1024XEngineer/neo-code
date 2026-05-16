@@ -250,37 +250,28 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentToolCallResult]; !ok {
 		t.Fatalf("expected subagent_tool_call_result handler to be registered")
 	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentSnapshotUpdated]; !ok {
+		t.Fatalf("expected subagent_snapshot_updated handler to be registered")
+	}
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventRuntimeSnapshotUpdated]; !ok {
 		t.Fatalf("expected runtime_snapshot_updated handler to be registered")
 	}
-	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventFactsUpdated]; !ok {
-		t.Fatalf("expected facts_updated handler to be registered")
-	}
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventDecisionMade]; !ok {
 		t.Fatalf("expected decision_made handler to be registered")
-	}
-	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentSnapshotUpdated]; !ok {
-		t.Fatalf("expected subagent_snapshot_updated handler to be registered")
 	}
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventTodoSnapshotUpdated]; !ok {
 		t.Fatalf("expected todo_snapshot_updated handler to be registered")
 	}
 }
 
-func TestRuntimeSnapshotAndFactsHandlers(t *testing.T) {
+func TestRuntimeSnapshotAndDecisionHandlers(t *testing.T) {
 	app, _ := newTestApp(t)
 
 	if runtimeEventRuntimeSnapshotUpdatedHandler(&app, agentruntime.RuntimeEvent{Payload: "bad"}) {
 		t.Fatalf("expected invalid runtime snapshot payload to return false")
 	}
-	if runtimeEventFactsUpdatedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}) {
-		t.Fatalf("expected invalid facts payload to return false")
-	}
 	if runtimeEventDecisionMadeHandler(&app, agentruntime.RuntimeEvent{Payload: true}) {
 		t.Fatalf("expected invalid decision payload to return false")
-	}
-	if runtimeEventSubAgentSnapshotUpdatedHandler(&app, agentruntime.RuntimeEvent{Payload: []string{"bad"}}) {
-		t.Fatalf("expected invalid subagent snapshot payload to return false")
 	}
 
 	runtimeEventRuntimeSnapshotUpdatedHandler(&app, agentruntime.RuntimeEvent{
@@ -600,6 +591,9 @@ func TestRuntimeEventSubAgentHandlers(t *testing.T) {
 	}) {
 		t.Fatalf("expected invalid subagent tool call payload to return false")
 	}
+	if runtimeEventSubAgentSnapshotUpdatedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}) {
+		t.Fatalf("expected invalid subagent snapshot payload to return false")
+	}
 	runtimeEventSubAgentToolCallHandler(&app, agentruntime.RuntimeEvent{
 		Type: agentruntime.EventSubAgentToolCallResult,
 		Payload: agentruntime.SubAgentToolCallEventPayload{
@@ -613,6 +607,20 @@ func TestRuntimeEventSubAgentHandlers(t *testing.T) {
 	last = app.activities[len(app.activities)-1]
 	if last.Title != "SubAgent tool call result" || !strings.Contains(last.Detail, "tool=bash") || last.IsError {
 		t.Fatalf("unexpected subagent tool call result activity: %+v", last)
+	}
+
+	runtimeEventSubAgentSnapshotUpdatedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.SubAgentSnapshotUpdatedPayload{
+			SubAgent: agentruntime.SubAgentSnapshot{
+				StartedCount:   2,
+				CompletedCount: 1,
+				FailedCount:    1,
+			},
+		},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "SubAgent snapshot updated" || !strings.Contains(last.Detail, "started=2 completed=1 failed=1") || last.IsError {
+		t.Fatalf("unexpected subagent snapshot activity: %+v", last)
 	}
 }
 
@@ -801,7 +809,7 @@ func TestRuntimeEventVerificationAndAcceptanceHandlers(t *testing.T) {
 		Payload: agentruntime.AcceptanceDecidedPayload{
 			Status:     "failed",
 			Summary:    "command_success: missing successful command evidence",
-			StopReason: agentruntime.StopReasonAcceptCheckFailed,
+			StopReason: agentruntime.StopReasonAcceptContinueExhausted,
 			Results: []agentruntime.AcceptanceCheckResult{
 				{
 					Passed: false,

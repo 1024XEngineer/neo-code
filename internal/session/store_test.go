@@ -620,7 +620,6 @@ func TestSQLiteStorePersistsPlanStateRoundTrip(t *testing.T) {
 					Goal:        "落地 plan/build 模式",
 					Steps:       []string{"扩展 session", "扩展 runtime"},
 					Constraints: []string{"保持 tools 边界"},
-					Verify:      AcceptChecks{{Kind: AcceptCheckCommandSuccess, Target: "go test ./internal/..."}},
 					Todos: []TodoItem{
 						{ID: "todo-plan-1", Content: "补 plan 模型"},
 					},
@@ -629,7 +628,6 @@ func TestSQLiteStorePersistsPlanStateRoundTrip(t *testing.T) {
 					Goal:          "落地 plan/build 模式",
 					KeySteps:      []string{"扩展 session", "扩展 runtime"},
 					Constraints:   []string{"保持 tools 边界"},
-					Verify:        AcceptChecks{{Kind: AcceptCheckCommandSuccess, Target: "go test ./internal/..."}},
 					ActiveTodoIDs: []string{"todo-plan-1"},
 				},
 			},

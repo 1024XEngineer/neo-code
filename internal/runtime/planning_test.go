@@ -222,16 +222,14 @@ func TestBuildPlanArtifact(t *testing.T) {
 		Status:    agentsession.PlanStatusDraft,
 		CreatedAt: time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC),
 		Spec: agentsession.PlanSpec{
-			Goal:   "旧计划",
-			Steps:  []string{"旧步骤"},
-			Verify: acceptText("旧验证"),
+			Goal:  "旧计划",
+			Steps: []string{"旧步骤"},
 		},
 	}
 	output := planTurnOutput{
 		PlanSpec: agentsession.PlanSpec{
-			Goal:   "新计划",
-			Steps:  []string{"步骤一"},
-			Verify: acceptText("验证一"),
+			Goal:  "新计划",
+			Steps: []string{"步骤一"},
 			Todos: []agentsession.TodoItem{
 				{ID: "todo-1", Content: "待办", Status: agentsession.TodoStatusPending},
 			},
@@ -239,7 +237,6 @@ func TestBuildPlanArtifact(t *testing.T) {
 		SummaryCandidate: summaryCandidate{
 			Goal:          "新计划",
 			KeySteps:      []string{"步骤一"},
-			Verify:        acceptText("验证一"),
 			ActiveTodoIDs: []string{"todo-1"},
 		},
 	}
@@ -274,9 +271,8 @@ func TestMarkCurrentPlanCompleted(t *testing.T) {
 		Revision: 1,
 		Status:   agentsession.PlanStatusDraft,
 		Spec: agentsession.PlanSpec{
-			Goal:   "执行当前计划",
-			Steps:  []string{"步骤一"},
-			Verify: acceptText("验证一"),
+			Goal:  "执行当前计划",
+			Steps: []string{"步骤一"},
 		},
 	}
 	if !markCurrentPlanCompleted(&session) {
@@ -307,9 +303,8 @@ func TestPlanningNeedsFullPlan(t *testing.T) {
 		Revision: 2,
 		Status:   agentsession.PlanStatusApproved,
 		Spec: agentsession.PlanSpec{
-			Goal:   "Use full plan when alignment is pending",
-			Steps:  []string{"align plan"},
-			Verify: acceptText("go test ./internal/runtime"),
+			Goal:  "Use full plan when alignment is pending",
+			Steps: []string{"align plan"},
 			Todos: []agentsession.TodoItem{
 				{ID: "todo-1", Content: "align plan", Status: agentsession.TodoStatusPending},
 			},
@@ -317,7 +312,6 @@ func TestPlanningNeedsFullPlan(t *testing.T) {
 		Summary: agentsession.SummaryView{
 			Goal:          "Use full plan when alignment is pending",
 			KeySteps:      []string{"align plan"},
-			Verify:        acceptText("go test ./internal/runtime"),
 			ActiveTodoIDs: []string{"todo-1"},
 		},
 	}
@@ -362,9 +356,8 @@ func TestApproveCurrentPlan(t *testing.T) {
 		Revision: 3,
 		Status:   agentsession.PlanStatusDraft,
 		Spec: agentsession.PlanSpec{
-			Goal:   "批准当前计划",
-			Steps:  []string{"步骤一"},
-			Verify: acceptText("验证一"),
+			Goal:  "批准当前计划",
+			Steps: []string{"步骤一"},
 		},
 	}
 	if err := approveCurrentPlan(&session, "plan-approve", 3); err != nil {
@@ -387,9 +380,8 @@ func TestRememberFullPlanRevisionClearsAlignmentFlags(t *testing.T) {
 		Revision: 2,
 		Status:   agentsession.PlanStatusApproved,
 		Spec: agentsession.PlanSpec{
-			Goal:   "完成全文对齐",
-			Steps:  []string{"步骤一"},
-			Verify: acceptText("验证一"),
+			Goal:  "完成全文对齐",
+			Steps: []string{"步骤一"},
 		},
 	}
 	session.PlanApprovalPendingFullAlign = true
@@ -425,9 +417,8 @@ func TestMarkCurrentPlanRestorePendingAndContextDirty(t *testing.T) {
 		Revision: 1,
 		Status:   agentsession.PlanStatusApproved,
 		Spec: agentsession.PlanSpec{
-			Goal:   "restore full plan",
-			Steps:  []string{"step one"},
-			Verify: acceptText("verify one"),
+			Goal:  "restore full plan",
+			Steps: []string{"step one"},
 		},
 	}
 	if !markCurrentPlanRestorePending(&session) {
@@ -481,9 +472,8 @@ func TestApproveCurrentPlanValidationErrors(t *testing.T) {
 		Revision: 2,
 		Status:   agentsession.PlanStatusDraft,
 		Spec: agentsession.PlanSpec{
-			Goal:   "审批校验",
-			Steps:  []string{"步骤一"},
-			Verify: acceptText("验证一"),
+			Goal:  "审批校验",
+			Steps: []string{"步骤一"},
 		},
 	}
 

@@ -5,27 +5,20 @@ import (
 	"strings"
 	"time"
 
-	runtimefacts "neo-code/internal/runtime/facts"
 	agentsession "neo-code/internal/session"
 )
 
-// RuntimeSnapshot 描述当前运行态的统一可观测快照，供 TUI/Gateway/Desktop 实时展示。
+// RuntimeSnapshot 描述当前运行态的统一快照，供 TUI/Gateway/Desktop 实时展示。
 type RuntimeSnapshot struct {
 	RunID     string           `json:"run_id"`
 	SessionID string           `json:"session_id"`
 	Phase     string           `json:"phase,omitempty"`
 	UpdatedAt time.Time        `json:"updated_at"`
 	Todos     TodoSnapshot     `json:"todos"`
-	Facts     FactsSnapshot    `json:"facts"`
 	Decision  DecisionSnapshot `json:"decision,omitempty"`
 	SubAgents SubAgentSnapshot `json:"subagents,omitempty"`
 	// PendingUserQuestion 表示当前 run 是否存在待回答 ask_user 问题。
 	PendingUserQuestion *UserQuestionRequestedPayload `json:"pending_user_question,omitempty"`
-}
-
-// FactsSnapshot 是 runtime facts 的传输快照。
-type FactsSnapshot struct {
-	RuntimeFacts runtimefacts.RuntimeFacts `json:"runtime_facts"`
 }
 
 // DecisionSnapshot 是终态裁决快照。
@@ -36,7 +29,7 @@ type DecisionSnapshot struct {
 	Details    []string `json:"details,omitempty"`
 }
 
-// SubAgentSnapshot 汇总子代理事实状态，避免客户端自行遍历事实结构。
+// SubAgentSnapshot 汇总当前 run 内由 spawn_subagent 产生的子代理结果。
 type SubAgentSnapshot struct {
 	StartedCount   int `json:"started_count"`
 	CompletedCount int `json:"completed_count"`
@@ -49,13 +42,7 @@ type RuntimeSnapshotUpdatedPayload struct {
 	Snapshot RuntimeSnapshot `json:"snapshot"`
 }
 
-// FactsUpdatedPayload 表示事实层快照更新事件。
-type FactsUpdatedPayload struct {
-	Reason string        `json:"reason,omitempty"`
-	Facts  FactsSnapshot `json:"facts"`
-}
-
-// SubAgentSnapshotUpdatedPayload 表示子代理事实快照更新事件。
+// SubAgentSnapshotUpdatedPayload 表示子代理聚合快照更新事件。
 type SubAgentSnapshotUpdatedPayload struct {
 	Reason   string           `json:"reason,omitempty"`
 	SubAgent SubAgentSnapshot `json:"subagent"`
@@ -70,13 +57,6 @@ func buildRuntimeSnapshot(state *runState) RuntimeSnapshot {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	todos := cloneTodosForPersistence(state.session.Todos)
-	todoSnapshot := buildTodoSnapshotFromItems(todos)
-	factsSnapshot := runtimefacts.RuntimeFacts{}
-	if state.factsCollector != nil {
-		factsSnapshot = state.factsCollector.Snapshot()
-	}
-
 	decisionSnapshot := DecisionSnapshot{}
 	if state.terminalSet || state.terminalStatus != "" || state.terminalStopReason != "" {
 		decisionSnapshot = DecisionSnapshot{
@@ -85,24 +65,16 @@ func buildRuntimeSnapshot(state *runState) RuntimeSnapshot {
 			Summary:    strings.TrimSpace(state.terminalStopDetail),
 		}
 	}
-	pendingUserQuestion := clonePendingUserQuestion(state.pendingUserQuestion)
 
 	return RuntimeSnapshot{
-		RunID:     strings.TrimSpace(state.runID),
-		SessionID: strings.TrimSpace(state.session.ID),
-		Phase:     strings.TrimSpace(string(state.lifecycle)),
-		UpdatedAt: time.Now(),
-		Todos:     todoSnapshot,
-		Facts: FactsSnapshot{
-			RuntimeFacts: factsSnapshot,
-		},
-		Decision: decisionSnapshot,
-		SubAgents: SubAgentSnapshot{
-			StartedCount:   len(factsSnapshot.SubAgents.Started),
-			CompletedCount: len(factsSnapshot.SubAgents.Completed),
-			FailedCount:    len(factsSnapshot.SubAgents.Failed),
-		},
-		PendingUserQuestion: pendingUserQuestion,
+		RunID:               strings.TrimSpace(state.runID),
+		SessionID:           strings.TrimSpace(state.session.ID),
+		Phase:               strings.TrimSpace(string(state.lifecycle)),
+		UpdatedAt:           time.Now(),
+		Todos:               buildTodoSnapshotFromItems(cloneTodosForPersistence(state.session.Todos)),
+		Decision:            decisionSnapshot,
+		SubAgents:           state.subAgentSnapshot.snapshot(),
+		PendingUserQuestion: clonePendingUserQuestion(state.pendingUserQuestion),
 	}
 }
 
@@ -119,43 +91,17 @@ func (s *Service) emitRuntimeSnapshotUpdated(ctx context.Context, state *runStat
 	})
 }
 
-// emitFactsUpdated 发出 facts_updated 事件，供 UI 实时消费事实增量状态。
-func (s *Service) emitFactsUpdated(state *runState, reason string) {
-	if s == nil || state == nil {
-		return
-	}
-	state.mu.Lock()
-	factsSnapshot := runtimefacts.RuntimeFacts{}
-	if state.factsCollector != nil {
-		factsSnapshot = state.factsCollector.Snapshot()
-	}
-	state.mu.Unlock()
-	s.emitRunScopedOptional(EventFactsUpdated, state, FactsUpdatedPayload{
-		Reason: strings.TrimSpace(reason),
-		Facts: FactsSnapshot{
-			RuntimeFacts: factsSnapshot,
-		},
-	})
-}
-
-// emitSubAgentSnapshotUpdated 发出 subagent_snapshot_updated 事件，供 UI 聚合展示子代理状态。
+// emitSubAgentSnapshotUpdated 发出独立的子代理聚合快照事件，供 UI 展示当前 run 总览。
 func (s *Service) emitSubAgentSnapshotUpdated(state *runState, reason string) {
 	if s == nil || state == nil {
 		return
 	}
 	state.mu.Lock()
-	factsSnapshot := runtimefacts.RuntimeFacts{}
-	if state.factsCollector != nil {
-		factsSnapshot = state.factsCollector.Snapshot()
-	}
+	snapshot := state.subAgentSnapshot.snapshot()
 	state.mu.Unlock()
 	s.emitRunScopedOptional(EventSubAgentSnapshotUpdated, state, SubAgentSnapshotUpdatedPayload{
-		Reason: strings.TrimSpace(reason),
-		SubAgent: SubAgentSnapshot{
-			StartedCount:   len(factsSnapshot.SubAgents.Started),
-			CompletedCount: len(factsSnapshot.SubAgents.Completed),
-			FailedCount:    len(factsSnapshot.SubAgents.Failed),
-		},
+		Reason:   strings.TrimSpace(reason),
+		SubAgent: snapshot,
 	})
 }
 
@@ -195,13 +141,9 @@ func (s *Service) GetRuntimeSnapshot(ctx context.Context, sessionID string) (Run
 		return RuntimeSnapshot{}, err
 	}
 	snapshot := RuntimeSnapshot{
-		SessionID: normalizedSessionID,
-		Phase:     "",
-		UpdatedAt: session.UpdatedAt,
-		Todos:     buildTodoSnapshotFromItems(session.ListTodos()),
-		Facts: FactsSnapshot{
-			RuntimeFacts: runtimefacts.RuntimeFacts{},
-		},
+		SessionID:           normalizedSessionID,
+		UpdatedAt:           session.UpdatedAt,
+		Todos:               buildTodoSnapshotFromItems(session.ListTodos()),
 		PendingUserQuestion: nil,
 	}
 	s.cacheRuntimeSnapshot(snapshot)

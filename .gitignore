@@ -55,3 +55,4 @@ web/build/*
 !web/build/icon.icns
 web/release/
 web/dist-electron/
+/.baoyu-skills/

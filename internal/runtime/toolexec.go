@@ -14,7 +14,6 @@ import (
 	"neo-code/internal/checkpoint"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/repository"
-	runtimefacts "neo-code/internal/runtime/facts"
 	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/tools"
 )
@@ -371,25 +370,33 @@ func (s *Service) emitCompletedToolCallResult(
 ) {
 	s.emitRunScoped(ctx, EventToolResult, state, result)
 	s.emitTodoToolEvent(ctx, state, call, result, execErr)
-	state.mu.Lock()
-	hasFactsUpdate := false
-	if state.factsCollector != nil {
-		state.factsCollector.ApplyToolResult(call.Name, result)
-		hasFactsUpdate = true
-	}
-	state.mu.Unlock()
-	if hasFactsUpdate {
-		s.emitFactsUpdated(state, "tool_result")
-		if strings.EqualFold(strings.TrimSpace(call.Name), tools.ToolNameSpawnSubAgent) {
-			s.emitSubAgentSnapshotUpdated(state, "tool_result")
-		}
-	}
+	s.emitSubAgentSnapshotEvents(ctx, state, call, result)
 
 	if isSuccessfulRememberToolCall(call.Name, result, execErr) {
 		state.mu.Lock()
 		state.rememberedThisRun = true
 		state.mu.Unlock()
 	}
+}
+
+// emitSubAgentSnapshotEvents 在 spawn_subagent 结果写回后刷新独立聚合快照。
+func (s *Service) emitSubAgentSnapshotEvents(
+	ctx context.Context,
+	state *runState,
+	call providertypes.ToolCall,
+	result tools.ToolResult,
+) {
+	if state == nil || !strings.EqualFold(strings.TrimSpace(call.Name), tools.ToolNameSpawnSubAgent) {
+		return
+	}
+	state.mu.Lock()
+	changed := state.subAgentSnapshot.applySpawnResult(result)
+	state.mu.Unlock()
+	if !changed {
+		return
+	}
+	s.emitSubAgentSnapshotUpdated(state, "tool_result")
+	s.emitRuntimeSnapshotUpdated(ctx, state, "subagent_updated")
 }
 
 // resolveToolParallelism 计算本轮工具执行的并发上限，避免无界 goroutine 扩散。
@@ -466,15 +473,6 @@ func (s *Service) emitTodoToolEvent(
 	action, _ := result.Metadata["action"].(string)
 	payload := buildTodoEventPayload(state, strings.TrimSpace(action), "")
 	if execErr == nil && !result.IsError {
-		state.mu.Lock()
-		if state.factsCollector != nil {
-			state.factsCollector.ApplyTodoSnapshot(runtimefacts.TodoSummaryLike{
-				RequiredOpen:      payload.Summary.RequiredOpen,
-				RequiredCompleted: payload.Summary.RequiredCompleted,
-				RequiredFailed:    payload.Summary.RequiredFailed,
-			})
-		}
-		state.mu.Unlock()
 		s.emitRunScoped(ctx, EventTodoUpdated, state, payload)
 		s.emitRunScoped(ctx, EventTodoSnapshotUpdated, state, payload)
 		s.emitRuntimeSnapshotUpdated(ctx, state, "todo_updated")
@@ -493,22 +491,6 @@ func (s *Service) emitTodoToolEvent(
 		reason = "todo_write_failed"
 	}
 	payload.Reason = reason
-	state.mu.Lock()
-	hasFactsUpdate := false
-	if state.factsCollector != nil {
-		state.factsCollector.ApplyTodoSnapshot(runtimefacts.TodoSummaryLike{
-			RequiredOpen:      payload.Summary.RequiredOpen,
-			RequiredCompleted: payload.Summary.RequiredCompleted,
-			RequiredFailed:    payload.Summary.RequiredFailed,
-		})
-		conflictIDs := extractTodoIDsFromPayload(payload.Items)
-		state.factsCollector.ApplyTodoConflict(conflictIDs)
-		hasFactsUpdate = true
-	}
-	state.mu.Unlock()
-	if hasFactsUpdate {
-		s.emitFactsUpdated(state, "todo_conflict")
-	}
 	s.emitRunScoped(ctx, EventTodoConflict, state, payload)
 	s.emitRunScoped(ctx, EventTodoSnapshotUpdated, state, payload)
 	s.emitRuntimeSnapshotUpdated(ctx, state, "todo_conflict")

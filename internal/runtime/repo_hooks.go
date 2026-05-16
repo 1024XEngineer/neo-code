@@ -23,6 +23,7 @@ const (
 	repoHooksTrustStoreVersion     = 1
 	repoHookScopeValue             = "repo"
 	repoHookKindBuiltIn            = "builtin"
+	repoHookKindCommand            = "command"
 	repoHookModeSync               = "sync"
 	repoHookFailurePolicyWarnOnly  = "warn_only"
 	repoHookFailurePolicyFailOpen  = "fail_open"
@@ -324,6 +325,7 @@ func validateRepoHookItem(item config.RuntimeHookItemConfig) error {
 	case string(runtimehooks.HookPointBeforeToolCall),
 		string(runtimehooks.HookPointAfterToolResult),
 		string(runtimehooks.HookPointBeforeCompletionDecision),
+		string(runtimehooks.HookPointAcceptGate),
 		string(runtimehooks.HookPointBeforePermissionDecision),
 		string(runtimehooks.HookPointAfterToolFailure),
 		string(runtimehooks.HookPointSessionStart),
@@ -342,10 +344,11 @@ func validateRepoHookItem(item config.RuntimeHookItemConfig) error {
 	if strings.ToLower(strings.TrimSpace(item.Scope)) != repoHookScopeValue {
 		return fmt.Errorf("scope %q is not supported", item.Scope)
 	}
-	if normalizedKind := strings.ToLower(strings.TrimSpace(item.Kind)); normalizedKind != repoHookKindBuiltIn {
+	if normalizedKind := strings.ToLower(strings.TrimSpace(item.Kind)); normalizedKind != repoHookKindBuiltIn &&
+		normalizedKind != repoHookKindCommand {
 		if _, external := repoHookExternalKinds[normalizedKind]; external {
 			return fmt.Errorf(
-				"external hook kind %q is not supported in P6-lite; only builtin hooks are enabled",
+				"external hook kind %q is not supported in current stage; only builtin/command hooks are enabled",
 				item.Kind,
 			)
 		}
@@ -362,14 +365,21 @@ func validateRepoHookItem(item config.RuntimeHookItemConfig) error {
 	default:
 		return fmt.Errorf("failure_policy %q is invalid", item.FailurePolicy)
 	}
-	handler := strings.ToLower(strings.TrimSpace(item.Handler))
-	switch handler {
-	case "require_file_exists", "warn_on_tool_call", "add_context_note":
-	default:
-		return fmt.Errorf("handler %q is not supported", item.Handler)
-	}
-	if handler == "warn_on_tool_call" && !runtimeHasWarnOnToolCallTargets(item.Params) {
-		return fmt.Errorf("handler %q requires params.tool_name or params.tool_names", item.Handler)
+	switch strings.ToLower(strings.TrimSpace(item.Kind)) {
+	case repoHookKindBuiltIn:
+		handler := strings.ToLower(strings.TrimSpace(item.Handler))
+		switch handler {
+		case "require_file_exists", "warn_on_tool_call", "add_context_note":
+		default:
+			return fmt.Errorf("handler %q is not supported", item.Handler)
+		}
+		if handler == "warn_on_tool_call" && !runtimeHasWarnOnToolCallTargets(item.Params) {
+			return fmt.Errorf("handler %q requires params.tool_name or params.tool_names", item.Handler)
+		}
+	case repoHookKindCommand:
+		if strings.TrimSpace(readHookParamString(item.Params, "command")) == "" {
+			return fmt.Errorf("kind command requires params.command")
+		}
 	}
 	return nil
 }
