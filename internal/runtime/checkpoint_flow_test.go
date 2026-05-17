@@ -178,6 +178,27 @@ func readCheckpointRestoredPayload(t *testing.T, events <-chan RuntimeEvent) Che
 	}
 }
 
+func countPerEditCheckpointMetaFiles(t *testing.T, root string) int {
+	t.Helper()
+
+	count := 0
+	if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if strings.HasPrefix(filepath.Base(path), "cp_") && strings.HasSuffix(path, ".json") {
+			count++
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WalkDir(%s) error = %v", root, err)
+	}
+	return count
+}
+
 func TestCreateStartOfTurnCheckpoint_PendingWrite(t *testing.T) {
 	fixture := newRuntimeCheckpointFixture(t)
 	fixture.captureFile(t, "main.go", []byte("package main\nconst v = 1\n"))
@@ -472,8 +493,89 @@ func TestRestoreCheckpointBaselineEmitsModeAndPaths(t *testing.T) {
 	if len(payload.Paths) != 1 || payload.Paths[0] != "baseline.txt" {
 		t.Fatalf("restore payload paths = %#v, want [baseline.txt]", payload.Paths)
 	}
-	if payload.GuardCheckpointID != "" {
-		t.Fatalf("baseline restore guard checkpoint id = %q, want empty", payload.GuardCheckpointID)
+	if payload.GuardCheckpointID == "" {
+		t.Fatal("baseline restore guard checkpoint id is empty")
+	}
+}
+
+func TestUndoRestoreCheckpoint_RestoresBaselineRollbackGuardPaths(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	targetA := filepath.Join(fixture.workdir, "baseline-a.txt")
+	targetB := filepath.Join(fixture.workdir, "baseline-b.txt")
+	targetC := filepath.Join(fixture.workdir, "baseline-c.txt")
+	if err := os.WriteFile(targetA, []byte("a before"), 0o644); err != nil {
+		t.Fatalf("WriteFile(targetA before) error = %v", err)
+	}
+	if err := os.WriteFile(targetB, []byte("b before"), 0o644); err != nil {
+		t.Fatalf("WriteFile(targetB before) error = %v", err)
+	}
+	if err := os.WriteFile(targetC, []byte("c before"), 0o644); err != nil {
+		t.Fatalf("WriteFile(targetC before) error = %v", err)
+	}
+	if _, err := fixture.perEditStore.CapturePreWrite(targetA); err != nil {
+		t.Fatalf("CapturePreWrite(targetA) error = %v", err)
+	}
+	if _, err := fixture.perEditStore.CapturePreWrite(targetB); err != nil {
+		t.Fatalf("CapturePreWrite(targetB) error = %v", err)
+	}
+	if _, err := fixture.perEditStore.CapturePreWrite(targetC); err != nil {
+		t.Fatalf("CapturePreWrite(targetC) error = %v", err)
+	}
+
+	state := newRunState("run-baseline-undo", fixture.session)
+	if err := fixture.service.createStartOfTurnCheckpoint(context.Background(), &state); err != nil {
+		t.Fatalf("createStartOfTurnCheckpoint() error = %v", err)
+	}
+	records, err := fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %#v, want 1", records)
+	}
+	cpRecord := records[0]
+	if err := fixture.checkpointStore.UpdateCheckpointStatus(context.Background(), cpRecord.CheckpointID, agentsession.CheckpointStatusAvailable); err != nil {
+		t.Fatalf("UpdateCheckpointStatus() error = %v", err)
+	}
+	if err := os.WriteFile(targetA, []byte("a after"), 0o644); err != nil {
+		t.Fatalf("WriteFile(targetA after) error = %v", err)
+	}
+	if err := os.WriteFile(targetB, []byte("b after"), 0o644); err != nil {
+		t.Fatalf("WriteFile(targetB after) error = %v", err)
+	}
+	if err := os.WriteFile(targetC, []byte("c after"), 0o644); err != nil {
+		t.Fatalf("WriteFile(targetC after) error = %v", err)
+	}
+
+	if _, err := fixture.service.RestoreCheckpoint(context.Background(), GatewayRestoreInput{
+		SessionID:    fixture.session.ID,
+		CheckpointID: cpRecord.CheckpointID,
+		Mode:         "baseline",
+		Paths:        []string{"baseline-a.txt", "baseline-b.txt"},
+	}); err != nil {
+		t.Fatalf("RestoreCheckpoint(baseline) error = %v", err)
+	}
+	if got := string(mustReadRuntimeFile(t, targetA)); got != "a before" {
+		t.Fatalf("baseline restored targetA = %q, want a before", got)
+	}
+	if got := string(mustReadRuntimeFile(t, targetB)); got != "b before" {
+		t.Fatalf("baseline restored targetB = %q, want b before", got)
+	}
+	if got := string(mustReadRuntimeFile(t, targetC)); got != "c after" {
+		t.Fatalf("baseline restored targetC = %q, want c after", got)
+	}
+
+	if _, err := fixture.service.UndoRestoreCheckpoint(context.Background(), fixture.session.ID); err != nil {
+		t.Fatalf("UndoRestoreCheckpoint() error = %v", err)
+	}
+	if got := string(mustReadRuntimeFile(t, targetA)); got != "a after" {
+		t.Fatalf("undo targetA = %q, want a after", got)
+	}
+	if got := string(mustReadRuntimeFile(t, targetB)); got != "b after" {
+		t.Fatalf("undo targetB = %q, want b after", got)
+	}
+	if got := string(mustReadRuntimeFile(t, targetC)); got != "c after" {
+		t.Fatalf("undo targetC = %q, want c after", got)
 	}
 }
 
@@ -503,9 +605,103 @@ func TestRestoreCheckpointBaselineRejectsPathsThatNormalizeEmpty(t *testing.T) {
 		t.Fatalf("UpdateCheckpointStatus() error = %v", err)
 	}
 
-	_, err = fixture.service.restoreCheckpointBaseline(context.Background(), fixture.session.ID, cpRecord.CheckpointID, []string{"./", " . "})
+	_, _, err = fixture.service.restoreCheckpointBaseline(context.Background(), fixture.session.ID, cpRecord.CheckpointID, []string{"./", " . "})
 	if err == nil || !strings.Contains(err.Error(), "baseline restore paths required") {
 		t.Fatalf("restoreCheckpointBaseline() error = %v, want baseline restore paths required", err)
+	}
+}
+
+func TestRestoreCheckpointBaselineRejectsNilPathsBeforeLoadingCheckpoint(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+
+	_, _, err := fixture.service.restoreCheckpointBaseline(context.Background(), fixture.session.ID, "cp-missing", nil)
+	if err == nil || !strings.Contains(err.Error(), "baseline restore paths required") {
+		t.Fatalf("restoreCheckpointBaseline() error = %v, want baseline restore paths required", err)
+	}
+}
+
+func TestRestoreCheckpointBaselineRejectsMissingStores(t *testing.T) {
+	var service Service
+
+	_, _, err := service.restoreCheckpointBaseline(context.Background(), "session-1", "cp-1", []string{"baseline.txt"})
+	if err == nil || !strings.Contains(err.Error(), "store not available") {
+		t.Fatalf("restoreCheckpointBaseline() error = %v, want store not available", err)
+	}
+}
+
+func TestRestoreCheckpointBaselineRejectsUnavailableOrNonRestorableCheckpoint(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	target := filepath.Join(fixture.workdir, "baseline.txt")
+	if err := os.WriteFile(target, []byte("before baseline"), 0o644); err != nil {
+		t.Fatalf("WriteFile(before baseline) error = %v", err)
+	}
+	if _, err := fixture.perEditStore.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite() error = %v", err)
+	}
+	if _, err := fixture.perEditStore.FinalizeWithExactState("cp-baseline-code"); err != nil {
+		t.Fatalf("FinalizeWithExactState() error = %v", err)
+	}
+	fixture.perEditStore.Reset()
+
+	tests := []struct {
+		name       string
+		id         string
+		status     agentsession.CheckpointStatus
+		restorable bool
+		want       string
+	}{
+		{
+			name:       "unavailable status",
+			id:         "cp-unavailable",
+			status:     agentsession.CheckpointStatusRestored,
+			restorable: true,
+			want:       "expected available",
+		},
+		{
+			name:       "not restorable",
+			id:         "cp-not-restorable",
+			status:     agentsession.CheckpointStatusAvailable,
+			restorable: false,
+			want:       "not restorable",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record, err := fixture.checkpointStore.CreateCheckpoint(context.Background(), checkpoint.CreateCheckpointInput{
+				Record: agentsession.CheckpointRecord{
+					CheckpointID:      tt.id,
+					WorkspaceKey:      agentsession.WorkspacePathKey(fixture.session.Workdir),
+					SessionID:         fixture.session.ID,
+					RunID:             "run-" + tt.id,
+					Workdir:           fixture.session.Workdir,
+					CreatedAt:         time.Now(),
+					Reason:            agentsession.CheckpointReasonManual,
+					CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-baseline-code"),
+					Restorable:        tt.restorable,
+					Status:            tt.status,
+				},
+				SessionCP: agentsession.SessionCheckpoint{
+					ID:           agentsession.NewID("sc"),
+					SessionID:    fixture.session.ID,
+					HeadJSON:     `{"workdir":"` + fixture.session.Workdir + `"}`,
+					MessagesJSON: `[]`,
+					CreatedAt:    time.Now(),
+				},
+			})
+			if err != nil {
+				t.Fatalf("CreateCheckpoint() error = %v", err)
+			}
+			if tt.status != agentsession.CheckpointStatusAvailable {
+				if err := fixture.checkpointStore.UpdateCheckpointStatus(context.Background(), record.CheckpointID, tt.status); err != nil {
+					t.Fatalf("UpdateCheckpointStatus() error = %v", err)
+				}
+			}
+
+			_, _, err = fixture.service.restoreCheckpointBaseline(context.Background(), fixture.session.ID, record.CheckpointID, []string{"baseline.txt"})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("restoreCheckpointBaseline() error = %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 
@@ -535,9 +731,182 @@ func TestRestoreCheckpointBaselineWrapsRestoreBaselineError(t *testing.T) {
 		t.Fatalf("UpdateCheckpointStatus() error = %v", err)
 	}
 
-	_, err = fixture.service.restoreCheckpointBaseline(context.Background(), fixture.session.ID, cpRecord.CheckpointID, []string{"missing.txt"})
-	if err == nil || !strings.Contains(err.Error(), "baseline restore code") || !strings.Contains(err.Error(), "missing.txt") {
-		t.Fatalf("restoreCheckpointBaseline() error = %v, want wrapped missing baseline path error", err)
+	_, _, err = fixture.service.restoreCheckpointBaseline(context.Background(), fixture.session.ID, cpRecord.CheckpointID, []string{"missing.txt"})
+	if err == nil || !strings.Contains(err.Error(), "baseline guard") || !strings.Contains(err.Error(), "missing.txt") {
+		t.Fatalf("restoreCheckpointBaseline() error = %v, want wrapped missing baseline guard path error", err)
+	}
+}
+
+func TestRestoreCheckpointBaselineRejectsSessionMismatch(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	target := filepath.Join(fixture.workdir, "baseline.txt")
+	if err := os.WriteFile(target, []byte("before baseline"), 0o644); err != nil {
+		t.Fatalf("WriteFile(before baseline) error = %v", err)
+	}
+	if _, err := fixture.perEditStore.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite() error = %v", err)
+	}
+
+	state := newRunState("run-baseline-session-mismatch", fixture.session)
+	if err := fixture.service.createStartOfTurnCheckpoint(context.Background(), &state); err != nil {
+		t.Fatalf("createStartOfTurnCheckpoint() error = %v", err)
+	}
+	records, err := fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	cpRecord := records[0]
+	if err := fixture.checkpointStore.UpdateCheckpointStatus(context.Background(), cpRecord.CheckpointID, agentsession.CheckpointStatusAvailable); err != nil {
+		t.Fatalf("UpdateCheckpointStatus() error = %v", err)
+	}
+
+	_, _, err = fixture.service.restoreCheckpointBaseline(context.Background(), "other-session", cpRecord.CheckpointID, []string{"baseline.txt"})
+	if err == nil || !strings.Contains(err.Error(), "session mismatch") {
+		t.Fatalf("restoreCheckpointBaseline() error = %v, want session mismatch", err)
+	}
+}
+
+func TestRestoreCheckpointBaselineRejectsCheckpointWithoutCodeSnapshot(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	record, err := fixture.checkpointStore.CreateCheckpoint(context.Background(), checkpoint.CreateCheckpointInput{
+		Record: agentsession.CheckpointRecord{
+			CheckpointID: "cp-no-code",
+			WorkspaceKey: agentsession.WorkspacePathKey(fixture.session.Workdir),
+			SessionID:    fixture.session.ID,
+			RunID:        "run-no-code",
+			Workdir:      fixture.session.Workdir,
+			CreatedAt:    time.Now(),
+			Reason:       agentsession.CheckpointReasonManual,
+			Restorable:   true,
+		},
+		SessionCP: agentsession.SessionCheckpoint{
+			ID:           agentsession.NewID("sc"),
+			SessionID:    fixture.session.ID,
+			HeadJSON:     `{"workdir":"` + fixture.session.Workdir + `"}`,
+			MessagesJSON: `[]`,
+			CreatedAt:    time.Now(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateCheckpoint() error = %v", err)
+	}
+
+	_, _, err = fixture.service.restoreCheckpointBaseline(context.Background(), fixture.session.ID, record.CheckpointID, []string{"baseline.txt"})
+	if err == nil || !strings.Contains(err.Error(), "has no code snapshot") {
+		t.Fatalf("restoreCheckpointBaseline() error = %v, want missing code snapshot", err)
+	}
+}
+
+func TestRestoreCheckpointBaselineDeletesGuardSnapshotWhenGuardCheckpointCreateFails(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	target := filepath.Join(fixture.workdir, "baseline.txt")
+	if err := os.WriteFile(target, []byte("before baseline"), 0o644); err != nil {
+		t.Fatalf("WriteFile(before baseline) error = %v", err)
+	}
+	if _, err := fixture.perEditStore.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite() error = %v", err)
+	}
+
+	state := newRunState("run-baseline-guard-create-fails", fixture.session)
+	if err := fixture.service.createStartOfTurnCheckpoint(context.Background(), &state); err != nil {
+		t.Fatalf("createStartOfTurnCheckpoint() error = %v", err)
+	}
+	records, err := fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	cpRecord := records[0]
+	if err := fixture.checkpointStore.UpdateCheckpointStatus(context.Background(), cpRecord.CheckpointID, agentsession.CheckpointStatusAvailable); err != nil {
+		t.Fatalf("UpdateCheckpointStatus() error = %v", err)
+	}
+	beforeCount := countPerEditCheckpointMetaFiles(t, fixture.projectDir)
+
+	if err := fixture.sessionStore.Close(); err != nil {
+		t.Fatalf("Close(sessionStore) error = %v", err)
+	}
+
+	_, _, err = fixture.service.restoreCheckpointBaseline(context.Background(), fixture.session.ID, cpRecord.CheckpointID, []string{"baseline.txt"})
+	if err == nil || !strings.Contains(err.Error(), "create baseline guard") {
+		t.Fatalf("restoreCheckpointBaseline() error = %v, want create baseline guard", err)
+	}
+	afterCount := countPerEditCheckpointMetaFiles(t, fixture.projectDir)
+	if afterCount != beforeCount {
+		t.Fatalf("per-edit checkpoint meta count = %d, want %d after failed guard create", afterCount, beforeCount)
+	}
+}
+
+func TestRestoreCheckpointBaselineMarksGuardBrokenWhenRestoreFails(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	target := filepath.Join(fixture.workdir, "baseline.txt")
+	if err := os.WriteFile(target, []byte("before baseline"), 0o644); err != nil {
+		t.Fatalf("WriteFile(before baseline) error = %v", err)
+	}
+	if _, err := fixture.perEditStore.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite() error = %v", err)
+	}
+
+	state := newRunState("run-baseline-failed-restore", fixture.session)
+	if err := fixture.service.createStartOfTurnCheckpoint(context.Background(), &state); err != nil {
+		t.Fatalf("createStartOfTurnCheckpoint() error = %v", err)
+	}
+	records, err := fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %#v, want 1", records)
+	}
+	cpRecord := records[0]
+	if err := fixture.checkpointStore.UpdateCheckpointStatus(context.Background(), cpRecord.CheckpointID, agentsession.CheckpointStatusAvailable); err != nil {
+		t.Fatalf("UpdateCheckpointStatus() error = %v", err)
+	}
+	if err := os.Remove(target); err != nil {
+		t.Fatalf("Remove(target) error = %v", err)
+	}
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatalf("Mkdir(target) error = %v", err)
+	}
+
+	_, _, err = fixture.service.restoreCheckpointBaseline(context.Background(), fixture.session.ID, cpRecord.CheckpointID, []string{"baseline.txt"})
+	if err == nil || !strings.Contains(err.Error(), "baseline restore code") {
+		t.Fatalf("restoreCheckpointBaseline() error = %v, want baseline restore code", err)
+	}
+
+	records, err = fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		t.Fatalf("ListCheckpoints(all) error = %v", err)
+	}
+	seenBrokenGuard := false
+	for _, record := range records {
+		if record.Reason != agentsession.CheckpointReasonGuard {
+			continue
+		}
+		if record.Status != agentsession.CheckpointStatusBroken {
+			t.Fatalf("guard status = %q, want broken", record.Status)
+		}
+		if record.CodeCheckpointRef != "" {
+			if perEditID := checkpoint.PerEditCheckpointIDFromRef(record.CodeCheckpointRef); perEditID != "" {
+				if err := fixture.perEditStore.RestoreExact(context.Background(), perEditID); err == nil {
+					t.Fatalf("failed restore guard %q still has restorable per-edit metadata", perEditID)
+				}
+			}
+		}
+		seenBrokenGuard = true
+	}
+	if !seenBrokenGuard {
+		t.Fatal("expected failed baseline restore to leave a broken guard record")
+	}
+
+	available, err := fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{
+		RestorableOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("ListCheckpoints(restorable) error = %v", err)
+	}
+	for _, record := range available {
+		if record.Reason == agentsession.CheckpointReasonGuard {
+			t.Fatalf("broken guard %q should not be returned as restorable", record.CheckpointID)
+		}
 	}
 }
 

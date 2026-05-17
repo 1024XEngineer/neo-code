@@ -5,7 +5,6 @@ import {
   type BudgetEstimateFailedPayload,
   type CheckpointCreatedPayload,
   type CheckpointDiffResultPayload,
-  type CheckpointEntry,
   type CheckpointRestoredPayload,
   type CheckpointUndoRestorePayload,
   type CheckpointWarningPayload,
@@ -40,7 +39,6 @@ export interface TodoHistoryEntry extends TodoViewItem {
 }
 
 interface RuntimeInsightState {
-  checkpoints: CheckpointEntry[]
   checkpointDiff: CheckpointDiffResultPayload | null
   checkpointEvents: Array<CheckpointCreatedPayload | CheckpointRestoredPayload | CheckpointUndoRestorePayload>
   checkpointWarning: CheckpointWarningPayload | null
@@ -62,7 +60,6 @@ interface RuntimeInsightState {
   ledgerReconciled: LedgerReconciledPayload | null
   budgetUsageRatio: number | null
 
-  setCheckpoints: (checkpoints: CheckpointEntry[]) => void
   setCheckpointDiff: (diff: CheckpointDiffResultPayload | null) => void
   addCheckpointEvent: (event: CheckpointCreatedPayload | CheckpointRestoredPayload | CheckpointUndoRestorePayload) => void
   setCheckpointWarning: (warning: CheckpointWarningPayload | null) => void
@@ -85,7 +82,6 @@ interface RuntimeInsightState {
 }
 
 const initialState = {
-  checkpoints: [] as CheckpointEntry[],
   checkpointDiff: null as CheckpointDiffResultPayload | null,
   checkpointEvents: [] as Array<CheckpointCreatedPayload | CheckpointRestoredPayload | CheckpointUndoRestorePayload>,
   checkpointWarning: null as CheckpointWarningPayload | null,
@@ -131,7 +127,6 @@ function patchLatestVerification(
 export const useRuntimeInsightStore = create<RuntimeInsightState>((set) => ({
   ...initialState,
 
-  setCheckpoints: (checkpoints) => set({ checkpoints }),
   setCheckpointDiff: (checkpointDiff) => set({ checkpointDiff }),
   addCheckpointEvent: (event) => set((s) => ({ checkpointEvents: [...s.checkpointEvents, event] })),
   setCheckpointWarning: (checkpointWarning) => set({ checkpointWarning }),

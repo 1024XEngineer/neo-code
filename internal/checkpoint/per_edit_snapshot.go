@@ -332,6 +332,59 @@ func (s *PerEditSnapshotStore) FinalizeExactForCheckpoints(checkpointID string, 
 	return true, nil
 }
 
+// FinalizeExactForCheckpointPaths 为指定 checkpoint 的部分路径捕获当前精确状态，用于 baseline rollback 的 Undo guard。
+func (s *PerEditSnapshotStore) FinalizeExactForCheckpointPaths(checkpointID string, sourceCheckpointID string, relPaths []string) (bool, error) {
+	if strings.TrimSpace(checkpointID) == "" {
+		return false, fmt.Errorf("per-edit: empty checkpointID")
+	}
+	if strings.TrimSpace(sourceCheckpointID) == "" {
+		return false, fmt.Errorf("per-edit: source checkpoint id required")
+	}
+	if len(relPaths) == 0 {
+		return false, fmt.Errorf("per-edit: exact snapshot paths required")
+	}
+
+	source, err := s.readCheckpointMeta(sourceCheckpointID)
+	if err != nil {
+		return false, err
+	}
+
+	baseVersions := make(map[string]int)
+	s.indexMu.Lock()
+	for _, relPath := range relPaths {
+		_, _, hash, version, resolveErr := s.resolveBaselineRestoreTargetLocked(source, sourceCheckpointID, relPath)
+		if resolveErr != nil {
+			s.indexMu.Unlock()
+			return false, resolveErr
+		}
+		if _, ok := baseVersions[hash]; !ok {
+			baseVersions[hash] = version
+		}
+	}
+	s.indexMu.Unlock()
+
+	if len(baseVersions) == 0 {
+		return false, nil
+	}
+	exactSnapshot, err := s.captureExactStateSnapshot(baseVersions)
+	if err != nil {
+		return false, err
+	}
+	if len(exactSnapshot) == 0 {
+		return false, nil
+	}
+	meta := CheckpointMeta{
+		CheckpointID:      checkpointID,
+		CreatedAt:         time.Now().UTC(),
+		FileVersions:      exactSnapshot,
+		ExactFileVersions: exactSnapshot,
+	}
+	if err := s.writeCheckpointMeta(meta); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // captureExactStateSnapshot 为当前 pending 里的每个文件追加一个“checkpoint 结束态”精确版本。
 func (s *PerEditSnapshotStore) captureExactStateSnapshot(baseVersions map[string]int) (map[string]int, error) {
 	s.indexMu.Lock()

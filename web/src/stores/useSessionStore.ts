@@ -132,21 +132,17 @@ export type BackendMessage = {
   is_error?: boolean
 }
 
-/** 并发拉取 session 详情 + todos + checkpoints + runtime snapshot，并把后者写入对应 store。
- *  todos / checkpoints / runtime snapshot 失败用 .catch 兜底，不阻断主流程的 loadSession。 */
+/** 并发拉取 session 详情 + todos + runtime snapshot，并把后者写入对应 store。
+ *  todos / runtime snapshot 失败用 .catch 兜底，不阻断主流程的 loadSession。 */
 export async function loadSessionWithInsights(gatewayAPI: GatewayAPI, sessionId: string) {
-  const [sessionFrame, todosResult, checkpointsResult, runtimeSnapshotResult] = await Promise.all([
+  const [sessionFrame, todosResult, runtimeSnapshotResult] = await Promise.all([
     gatewayAPI.loadSession(sessionId),
     (gatewayAPI.listSessionTodos?.(sessionId) ?? Promise.resolve(null)).catch(() => null),
-    (gatewayAPI.listCheckpoints?.({ session_id: sessionId, limit: 50 }) ?? Promise.resolve(null)).catch(() => null),
     (gatewayAPI.getRuntimeSnapshot?.(sessionId) ?? Promise.resolve(null)).catch(() => null),
   ])
   const insightStore = useRuntimeInsightStore.getState()
   if (todosResult?.payload) {
     insightStore.setTodoSnapshot(todosResult.payload)
-  }
-  if (checkpointsResult?.payload) {
-    insightStore.setCheckpoints(checkpointsResult.payload)
   }
   const pendingQuestion = runtimeSnapshotResult?.payload?.pending_user_question
   if (pendingQuestion) {
@@ -304,6 +300,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       chatStore.setTransitioning(true)
       chatStore.clearMessages()
       useRuntimeInsightStore.getState().reset()
+      useUIStore.getState().clearCheckpointRollbackUndo()
 
       // 2. Update session ID
       set({ currentSessionId: sessionId })
@@ -311,7 +308,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // 3. Bind stream (events will be discarded due to isTransitioning)
       await gatewayAPI.bindStream({ session_id: sessionId, channel: 'all' })
 
-      // 4. Load historical messages (concurrently fetch todos + checkpoints)
+      // 4. Load historical messages (concurrently fetch todos + runtime snapshot)
       const sessionFrame = await loadSessionWithInsights(gatewayAPI, sessionId)
       const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
 
@@ -350,6 +347,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     useChatStore.getState().clearMessages()
     useRuntimeInsightStore.getState().reset()
+    useUIStore.getState().clearCheckpointRollbackUndo()
     set({ currentSessionId: '', currentProjectId: '' })
   },
 
@@ -375,6 +373,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     useChatStore.getState().clearMessages()
     useRuntimeInsightStore.getState().reset()
+    useUIStore.getState().clearCheckpointRollbackUndo()
     set({ currentSessionId: '', currentProjectId: '' })
   },
 
@@ -410,7 +409,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             await gatewayAPI.bindStream({ session_id: firstSession.id, channel: 'all' })
             set({ _initialBindDone: true })
 
-            // Load historical messages for the auto-selected session (concurrently fetch todos + checkpoints)
+            // Load historical messages for the auto-selected session (concurrently fetch todos + runtime snapshot)
             const sessionFrame = await loadSessionWithInsights(gatewayAPI, firstSession.id)
             const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
             if (sessionData.messages && sessionData.messages.length > 0) {

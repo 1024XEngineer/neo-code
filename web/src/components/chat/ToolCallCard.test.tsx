@@ -1,10 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import ToolCallCard from './ToolCallCard'
-
-vi.mock('./CheckpointInlineMark', () => ({
-	default: ({ checkpointId }: { checkpointId: string }) => <span>cp:{checkpointId}</span>,
-}))
 
 describe('ToolCallCard', () => {
 	it('shows running state and expands/collapses', () => {
@@ -44,7 +40,6 @@ describe('ToolCallCard', () => {
 						replace_string: 'new',
 					}),
 					toolResult: 'ok',
-					checkpointId: 'cp1',
 					timestamp: 1,
 				} as any}
 			/>,
@@ -53,6 +48,5 @@ describe('ToolCallCard', () => {
 		expect(screen.getAllByText('a.ts').length).toBeGreaterThan(0)
 		expect(screen.getByText('old')).toBeInTheDocument()
 		expect(screen.getByText('new')).toBeInTheDocument()
-		expect(screen.getByText('cp:cp1')).toBeInTheDocument()
 	})
 })

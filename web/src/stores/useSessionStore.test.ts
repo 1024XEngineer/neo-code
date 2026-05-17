@@ -259,7 +259,7 @@ describe('useSessionStore', () => {
     expect(session.time).toBe('1970-01-01T00:00:00.000Z')
   })
 
-  it('switchSession concurrently fetches todos and checkpoints', async () => {
+  it('switchSession concurrently fetches todos and runtime snapshot', async () => {
     const mockBindStream = vi.fn().mockResolvedValue({})
     const mockLoadSession = vi.fn().mockResolvedValue({
       payload: { messages: [{ role: 'user', content: 'hello', tool_calls: [] }] },
@@ -270,24 +270,21 @@ describe('useSessionStore', () => {
         summary: { total: 1, required_total: 1, required_completed: 0, required_failed: 0, required_open: 1 },
       },
     })
-    const mockListCheckpoints = vi.fn().mockResolvedValue({
-      payload: [{ checkpoint_id: 'cp1', session_id: 'sess-2', reason: 'test', status: 'active', restorable: true, created_at_ms: Date.now() }],
-    })
+    const mockGetRuntimeSnapshot = vi.fn().mockResolvedValue({ payload: {} })
     const mockAPI = {
       bindStream: mockBindStream,
       loadSession: mockLoadSession,
       listSessionTodos: mockListSessionTodos,
-      listCheckpoints: mockListCheckpoints,
+      getRuntimeSnapshot: mockGetRuntimeSnapshot,
     } as any
 
     await useSessionStore.getState().switchSession('sess-2', mockAPI)
 
     expect(mockLoadSession).toHaveBeenCalledWith('sess-2')
     expect(mockListSessionTodos).toHaveBeenCalledWith('sess-2')
-    expect(mockListCheckpoints).toHaveBeenCalledWith({ session_id: 'sess-2', limit: 50 })
+    expect(mockGetRuntimeSnapshot).toHaveBeenCalledWith('sess-2')
 
     const insightStore = useRuntimeInsightStore.getState()
     expect(insightStore.todoSnapshot?.items?.[0].id).toBe('t1')
-    expect(insightStore.checkpoints[0].checkpoint_id).toBe('cp1')
   })
 })

@@ -197,14 +197,14 @@ func (s *Service) RestoreCheckpoint(ctx context.Context, input GatewayRestoreInp
 	}
 	if mode == "baseline" {
 		paths := normalizeBaselineRestorePaths(input.Paths)
-		result, err := s.restoreCheckpointBaseline(ctx, input.SessionID, input.CheckpointID, paths)
+		result, guardRecord, err := s.restoreCheckpointBaseline(ctx, input.SessionID, input.CheckpointID, paths)
 		if err != nil {
 			return RestoreResult{}, err
 		}
 		_ = s.emit(ctx, EventCheckpointRestored, "", result.SessionID, CheckpointRestoredPayload{
 			CheckpointID:      result.CheckpointID,
 			SessionID:         result.SessionID,
-			GuardCheckpointID: "",
+			GuardCheckpointID: guardRecord.CheckpointID,
 			Mode:              "baseline",
 			Paths:             paths,
 		})
@@ -326,43 +326,59 @@ func (s *Service) restoreCheckpointBaseline(
 	ctx context.Context,
 	sessionID, checkpointID string,
 	paths []string,
-) (RestoreResult, error) {
+) (RestoreResult, agentsession.CheckpointRecord, error) {
 	if s.checkpointStore == nil || s.perEditStore == nil {
-		return RestoreResult{}, fmt.Errorf("checkpoint: store not available")
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: store not available")
 	}
 	sessionID = strings.TrimSpace(sessionID)
 	checkpointID = strings.TrimSpace(checkpointID)
 	if sessionID == "" || checkpointID == "" {
-		return RestoreResult{}, fmt.Errorf("checkpoint: session_id and checkpoint_id required")
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: session_id and checkpoint_id required")
 	}
 	if len(paths) == 0 {
-		return RestoreResult{}, fmt.Errorf("checkpoint: baseline restore paths required")
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: baseline restore paths required")
 	}
 	record, _, err := s.checkpointStore.GetCheckpoint(ctx, checkpointID)
 	if err != nil {
-		return RestoreResult{}, err
+		return RestoreResult{}, agentsession.CheckpointRecord{}, err
 	}
 	if record.SessionID != sessionID {
-		return RestoreResult{}, fmt.Errorf("checkpoint: session mismatch")
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: session mismatch")
 	}
 	if record.Status != agentsession.CheckpointStatusAvailable {
-		return RestoreResult{}, fmt.Errorf("checkpoint: status is %s, expected available", record.Status)
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: status is %s, expected available", record.Status)
 	}
 	if !record.Restorable {
-		return RestoreResult{}, fmt.Errorf("checkpoint: not restorable")
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: not restorable")
 	}
 	perEditID := checkpoint.PerEditCheckpointIDFromRef(record.CodeCheckpointRef)
 	if perEditID == "" {
-		return RestoreResult{}, fmt.Errorf("checkpoint: %s has no code snapshot", checkpointID)
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: %s has no code snapshot", checkpointID)
 	}
 	relPaths := normalizeBaselineRestorePaths(paths)
 	if len(relPaths) == 0 {
-		return RestoreResult{}, fmt.Errorf("checkpoint: baseline restore paths required")
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: baseline restore paths required")
+	}
+	guardID := agentsession.NewID("checkpoint")
+	guardWritten, finalizeErr := s.perEditStore.FinalizeExactForCheckpointPaths(guardID, perEditID, relPaths)
+	if finalizeErr != nil {
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: finalize baseline guard: %w", finalizeErr)
+	}
+	guardRecord, guardErr := s.createGuardCheckpoint(ctx, sessionID, record.RunID, guardID, guardWritten, "")
+	if guardErr != nil {
+		if guardWritten {
+			_ = s.perEditStore.DeleteCheckpoint(guardID)
+		}
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: create baseline guard: %w", guardErr)
 	}
 	if err := s.perEditStore.RestoreBaseline(ctx, perEditID, relPaths); err != nil {
-		return RestoreResult{}, fmt.Errorf("checkpoint: baseline restore code: %w", err)
+		if guardWritten {
+			_ = s.perEditStore.DeleteCheckpoint(guardID)
+		}
+		_ = s.checkpointStore.UpdateCheckpointStatus(ctx, guardRecord.CheckpointID, agentsession.CheckpointStatusBroken)
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: baseline restore code: %w", err)
 	}
-	return RestoreResult{CheckpointID: checkpointID, SessionID: sessionID}, nil
+	return RestoreResult{CheckpointID: checkpointID, SessionID: sessionID}, guardRecord, nil
 }
 
 // normalizeBaselineRestorePaths 统一 baseline 文件回退路径，保证恢复执行与事件通知使用同一组相对路径。

@@ -11,8 +11,6 @@ import {
   type ListSessionTodosResult,
   type GetRuntimeSnapshotParams,
   type GetRuntimeSnapshotResult,
-  type ListCheckpointsParams,
-  type ListCheckpointsResult,
   type RestoreCheckpointParams,
   type RestoreCheckpointResult,
   type UndoRestoreParams,
@@ -127,10 +125,6 @@ export class GatewayAPI {
       Method.GetRuntimeSnapshot,
       { session_id: sessionId } satisfies GetRuntimeSnapshotParams,
     )
-  }
-
-  async listCheckpoints(params: ListCheckpointsParams) {
-    return this.ws.call<ListCheckpointsResult>(Method.ListCheckpoints, params)
   }
 
   async restoreCheckpoint(params: RestoreCheckpointParams) {

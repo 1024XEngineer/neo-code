@@ -1920,3 +1920,178 @@ func TestRestoreBaseline_ErrorsWhenPathMissingFromBaseline(t *testing.T) {
 		t.Fatalf("RestoreBaseline missing path error = %v", err)
 	}
 }
+
+func TestFinalizeExactForCheckpointPaths_CapturesSelectedCurrentPaths(t *testing.T) {
+	store, workdir := newTestStore(t)
+	targetA := writeWorkdirFile(t, workdir, "a.txt", "a before\n")
+	targetB := writeWorkdirFile(t, workdir, "b.txt", "b before\n")
+	if _, err := store.CapturePreWrite(targetA); err != nil {
+		t.Fatalf("CapturePreWrite(a): %v", err)
+	}
+	if _, err := store.CapturePreWrite(targetB); err != nil {
+		t.Fatalf("CapturePreWrite(b): %v", err)
+	}
+	if err := os.WriteFile(targetA, []byte("a source\n"), 0o644); err != nil {
+		t.Fatalf("write a source: %v", err)
+	}
+	if err := os.WriteFile(targetB, []byte("b source\n"), 0o644); err != nil {
+		t.Fatalf("write b source: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp-source"); err != nil {
+		t.Fatalf("FinalizeWithExactState: %v", err)
+	}
+	store.Reset()
+
+	if err := os.WriteFile(targetA, []byte("a guard\n"), 0o644); err != nil {
+		t.Fatalf("write a guard: %v", err)
+	}
+	if err := os.WriteFile(targetB, []byte("b guard\n"), 0o644); err != nil {
+		t.Fatalf("write b guard: %v", err)
+	}
+	written, err := store.FinalizeExactForCheckpointPaths("cp-guard", "cp-source", []string{"a.txt", "./b.txt", "a.txt"})
+	if err != nil {
+		t.Fatalf("FinalizeExactForCheckpointPaths: %v", err)
+	}
+	if !written {
+		t.Fatal("FinalizeExactForCheckpointPaths written = false, want true")
+	}
+
+	if err := os.WriteFile(targetA, []byte("a drift\n"), 0o644); err != nil {
+		t.Fatalf("write a drift: %v", err)
+	}
+	if err := os.WriteFile(targetB, []byte("b drift\n"), 0o644); err != nil {
+		t.Fatalf("write b drift: %v", err)
+	}
+	if err := store.RestoreExact(context.Background(), "cp-guard"); err != nil {
+		t.Fatalf("RestoreExact(cp-guard): %v", err)
+	}
+	if got := mustReadFile(t, targetA); got != "a guard\n" {
+		t.Fatalf("targetA = %q, want guard", got)
+	}
+	if got := mustReadFile(t, targetB); got != "b guard\n" {
+		t.Fatalf("targetB = %q, want guard", got)
+	}
+}
+
+func TestFinalizeExactForCheckpointPaths_UsesVersionMetaWhenDisplayPathIndexIsMissing(t *testing.T) {
+	store, workdir := newTestStore(t)
+	target := writeWorkdirFile(t, workdir, "fallback.txt", "before\n")
+	if _, err := store.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("source\n"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp-source"); err != nil {
+		t.Fatalf("FinalizeWithExactState: %v", err)
+	}
+	store.Reset()
+
+	store.indexMu.Lock()
+	store.displayPaths = map[string]string{}
+	store.indexMu.Unlock()
+
+	if err := os.WriteFile(target, []byte("guard\n"), 0o644); err != nil {
+		t.Fatalf("write guard: %v", err)
+	}
+	written, err := store.FinalizeExactForCheckpointPaths("cp-guard", "cp-source", []string{"fallback.txt"})
+	if err != nil {
+		t.Fatalf("FinalizeExactForCheckpointPaths: %v", err)
+	}
+	if !written {
+		t.Fatal("FinalizeExactForCheckpointPaths written = false, want true")
+	}
+
+	if err := os.WriteFile(target, []byte("drift\n"), 0o644); err != nil {
+		t.Fatalf("write drift: %v", err)
+	}
+	if err := store.RestoreExact(context.Background(), "cp-guard"); err != nil {
+		t.Fatalf("RestoreExact(cp-guard): %v", err)
+	}
+	if got := mustReadFile(t, target); got != "guard\n" {
+		t.Fatalf("restored content = %q, want guard", got)
+	}
+}
+
+func TestFinalizeExactForCheckpointPaths_CapturesDeletedAndCreatedCurrentState(t *testing.T) {
+	store, workdir := newTestStore(t)
+	deleted := writeWorkdirFile(t, workdir, "deleted.txt", "before delete\n")
+	created := filepath.Join(workdir, "created.txt")
+	if _, err := store.CapturePreWrite(deleted); err != nil {
+		t.Fatalf("CapturePreWrite(deleted): %v", err)
+	}
+	if _, err := store.CapturePreWrite(created); err != nil {
+		t.Fatalf("CapturePreWrite(created): %v", err)
+	}
+	if err := os.Remove(deleted); err != nil {
+		t.Fatalf("remove deleted current: %v", err)
+	}
+	if err := os.WriteFile(created, []byte("created current\n"), 0o644); err != nil {
+		t.Fatalf("write created current: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp-source"); err != nil {
+		t.Fatalf("FinalizeWithExactState: %v", err)
+	}
+	store.Reset()
+
+	written, err := store.FinalizeExactForCheckpointPaths("cp-guard", "cp-source", []string{"deleted.txt", "created.txt"})
+	if err != nil {
+		t.Fatalf("FinalizeExactForCheckpointPaths: %v", err)
+	}
+	if !written {
+		t.Fatal("FinalizeExactForCheckpointPaths written = false, want true")
+	}
+
+	if err := os.WriteFile(deleted, []byte("deleted drift\n"), 0o644); err != nil {
+		t.Fatalf("write deleted drift: %v", err)
+	}
+	if err := os.Remove(created); err != nil {
+		t.Fatalf("remove created drift: %v", err)
+	}
+	if err := store.RestoreExact(context.Background(), "cp-guard"); err != nil {
+		t.Fatalf("RestoreExact(cp-guard): %v", err)
+	}
+	if _, err := os.Stat(deleted); !os.IsNotExist(err) {
+		t.Fatalf("deleted should be absent after exact restore, stat err = %v", err)
+	}
+	if got := mustReadFile(t, created); got != "created current\n" {
+		t.Fatalf("created = %q, want current", got)
+	}
+}
+
+func TestFinalizeExactForCheckpointPaths_ValidatesInputsAndPaths(t *testing.T) {
+	store, workdir := newTestStore(t)
+	target := writeWorkdirFile(t, workdir, "tracked.txt", "before\n")
+	if _, err := store.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("after\n"), 0o644); err != nil {
+		t.Fatalf("write after: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp-source"); err != nil {
+		t.Fatalf("FinalizeWithExactState: %v", err)
+	}
+	store.Reset()
+
+	tests := []struct {
+		name       string
+		checkpoint string
+		source     string
+		paths      []string
+		want       string
+	}{
+		{name: "empty checkpoint", checkpoint: "", source: "cp-source", paths: []string{"tracked.txt"}, want: "empty checkpointID"},
+		{name: "empty source", checkpoint: "cp-guard", source: "", paths: []string{"tracked.txt"}, want: "source checkpoint id required"},
+		{name: "missing source", checkpoint: "cp-guard", source: "cp-missing", paths: []string{"tracked.txt"}, want: "checkpoint cp-missing not found"},
+		{name: "empty paths", checkpoint: "cp-guard", source: "cp-source", paths: nil, want: "exact snapshot paths required"},
+		{name: "missing path", checkpoint: "cp-guard", source: "cp-source", paths: []string{"missing.txt"}, want: "baseline version for path missing.txt not found"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := store.FinalizeExactForCheckpointPaths(tt.checkpoint, tt.source, tt.paths)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("FinalizeExactForCheckpointPaths error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}

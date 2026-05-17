@@ -12,6 +12,14 @@ export interface Toast {
   type: "info" | "error" | "success";
 }
 
+export interface CheckpointRollbackUndoState {
+  sessionId: string;
+  checkpointId: string;
+  guardCheckpointId: string;
+  paths: string[];
+  status: "idle" | "undoing";
+}
+
 export interface FileChange {
   id: string;
   path: string;
@@ -215,6 +223,7 @@ interface UIState {
   searchQuery: string;
   fileChanges: FileChange[];
   isRestoringCheckpoint: boolean;
+  checkpointRollbackUndo: CheckpointRollbackUndoState | null;
   gitDiffSummary: GitDiffSummary;
   gitDiffLoading: boolean;
   gitDiffError: string;
@@ -239,6 +248,13 @@ interface UIState {
   rejectFileChange: (id: string) => void;
   clearFileChanges: () => void;
   setRestoringCheckpoint: (restoring: boolean) => void;
+  setCheckpointRollbackUndo: (
+    undo: Omit<CheckpointRollbackUndoState, "status">,
+  ) => void;
+  setCheckpointRollbackUndoStatus: (
+    status: CheckpointRollbackUndoState["status"],
+  ) => void;
+  clearCheckpointRollbackUndo: () => void;
   openPreviewTab: (path: string) => OpenPreviewTabResult;
   openGitDiffTab: (path: string) => OpenPreviewTabResult;
   activatePreviewTab: (id: string) => void;
@@ -272,6 +288,7 @@ export const useUIStore = create<UIState>((set) => ({
   searchQuery: "",
   fileChanges: [],
   isRestoringCheckpoint: false,
+  checkpointRollbackUndo: null,
   gitDiffSummary: createEmptyGitDiffSummary(),
   gitDiffLoading: false,
   gitDiffError: "",
@@ -316,6 +333,25 @@ export const useUIStore = create<UIState>((set) => ({
   clearFileChanges: () => set({ fileChanges: [] }),
   setRestoringCheckpoint: (isRestoringCheckpoint) =>
     set({ isRestoringCheckpoint }),
+  setCheckpointRollbackUndo: (undo) =>
+    set({
+      checkpointRollbackUndo: {
+        ...undo,
+        status: "idle",
+      },
+    }),
+  setCheckpointRollbackUndoStatus: (status) =>
+    set((state) =>
+      state.checkpointRollbackUndo
+        ? {
+            checkpointRollbackUndo: {
+              ...state.checkpointRollbackUndo,
+              status,
+            },
+          }
+        : state,
+    ),
+  clearCheckpointRollbackUndo: () => set({ checkpointRollbackUndo: null }),
   openPreviewTab: (path) => {
     const normalizedPath = path.trim();
     const tabID = `file:${normalizedPath}`;
