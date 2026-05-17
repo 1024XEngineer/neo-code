@@ -1973,6 +1973,46 @@ func TestFinalizeExactForCheckpointPaths_CapturesSelectedCurrentPaths(t *testing
 	}
 }
 
+func TestFinalizeExactForCheckpointPaths_UsesVersionMetaWhenDisplayPathIndexIsMissing(t *testing.T) {
+	store, workdir := newTestStore(t)
+	target := writeWorkdirFile(t, workdir, "fallback.txt", "before\n")
+	if _, err := store.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("source\n"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp-source"); err != nil {
+		t.Fatalf("FinalizeWithExactState: %v", err)
+	}
+	store.Reset()
+
+	store.indexMu.Lock()
+	store.displayPaths = map[string]string{}
+	store.indexMu.Unlock()
+
+	if err := os.WriteFile(target, []byte("guard\n"), 0o644); err != nil {
+		t.Fatalf("write guard: %v", err)
+	}
+	written, err := store.FinalizeExactForCheckpointPaths("cp-guard", "cp-source", []string{"fallback.txt"})
+	if err != nil {
+		t.Fatalf("FinalizeExactForCheckpointPaths: %v", err)
+	}
+	if !written {
+		t.Fatal("FinalizeExactForCheckpointPaths written = false, want true")
+	}
+
+	if err := os.WriteFile(target, []byte("drift\n"), 0o644); err != nil {
+		t.Fatalf("write drift: %v", err)
+	}
+	if err := store.RestoreExact(context.Background(), "cp-guard"); err != nil {
+		t.Fatalf("RestoreExact(cp-guard): %v", err)
+	}
+	if got := mustReadFile(t, target); got != "guard\n" {
+		t.Fatalf("restored content = %q, want guard", got)
+	}
+}
+
 func TestFinalizeExactForCheckpointPaths_CapturesDeletedAndCreatedCurrentState(t *testing.T) {
 	store, workdir := newTestStore(t)
 	deleted := writeWorkdirFile(t, workdir, "deleted.txt", "before delete\n")
@@ -2042,6 +2082,7 @@ func TestFinalizeExactForCheckpointPaths_ValidatesInputsAndPaths(t *testing.T) {
 	}{
 		{name: "empty checkpoint", checkpoint: "", source: "cp-source", paths: []string{"tracked.txt"}, want: "empty checkpointID"},
 		{name: "empty source", checkpoint: "cp-guard", source: "", paths: []string{"tracked.txt"}, want: "source checkpoint id required"},
+		{name: "missing source", checkpoint: "cp-guard", source: "cp-missing", paths: []string{"tracked.txt"}, want: "checkpoint cp-missing not found"},
 		{name: "empty paths", checkpoint: "cp-guard", source: "cp-source", paths: nil, want: "exact snapshot paths required"},
 		{name: "missing path", checkpoint: "cp-guard", source: "cp-source", paths: []string{"missing.txt"}, want: "baseline version for path missing.txt not found"},
 	}
