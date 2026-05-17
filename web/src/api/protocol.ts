@@ -17,7 +17,6 @@ export const Method = {
   LoadSession: "gateway.loadSession",
   ListSessionTodos: "session.todos.list",
   GetRuntimeSnapshot: "runtime.snapshot.get",
-  ListCheckpoints: "checkpoint.list",
   RestoreCheckpoint: "checkpoint.restore",
   UndoRestore: "checkpoint.undoRestore",
   CheckpointDiff: "checkpoint.diff",
@@ -243,12 +242,6 @@ export interface GetRuntimeSnapshotParams {
   session_id: string;
 }
 
-export interface ListCheckpointsParams {
-  session_id: string;
-  limit?: number;
-  restorable_only?: boolean;
-}
-
 export interface RestoreCheckpointParams {
   session_id: string;
   checkpoint_id: string;
@@ -465,15 +458,6 @@ export interface AcceptanceDecidedPayload {
   continue_hint?: string;
 }
 
-export interface CheckpointEntry {
-  checkpoint_id: string;
-  session_id: string;
-  reason: string;
-  status: string;
-  restorable: boolean;
-  created_at_ms: number;
-}
-
 export interface FileDiffs {
   added?: string[];
   deleted?: string[];
@@ -530,7 +514,6 @@ export interface CheckpointUndoRestorePayload {
   session_id: string;
 }
 
-export type ListCheckpointsResult = RPCResult<CheckpointEntry[]>;
 export type RestoreCheckpointResult = RPCResult<CheckpointRestoreResultPayload>;
 export type UndoRestoreResult = RPCResult<CheckpointRestoreResultPayload>;
 export type CheckpointDiffResult = RPCResult<CheckpointDiffResultPayload>;

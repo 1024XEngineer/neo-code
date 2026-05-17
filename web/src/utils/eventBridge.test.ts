@@ -1697,9 +1697,9 @@ describe("eventBridge", () => {
     );
   });
 
-  it("CheckpointCreated attaches checkpointId to the latest done tool_call", () => {
+  it("CheckpointCreated only records runtime insight and does not decorate completed tool calls", () => {
     const api = createMockGatewayAPI();
-    // 先创建并完成一个 tool call
+
     handleGatewayEvent(
       {
         type: EventType.ToolStart,
@@ -1728,7 +1728,6 @@ describe("eventBridge", () => {
       },
       api,
     );
-    // 然后创建 checkpoint
     handleGatewayEvent(
       {
         type: EventType.CheckpointCreated,
@@ -1753,8 +1752,12 @@ describe("eventBridge", () => {
     const toolMsg = useChatStore
       .getState()
       .messages.find((m) => m.type === "tool_call");
-    expect(toolMsg?.checkpointId).toBe("cp1");
-    expect(toolMsg?.checkpointStatus).toBe("available");
+    expect((toolMsg as any)?.checkpointId).toBeUndefined();
+    expect((toolMsg as any)?.checkpointStatus).toBeUndefined();
+    expect(useRuntimeInsightStore.getState().checkpointEvents[0]).toMatchObject({
+      checkpoint_id: "cp1",
+      reason: "pre_write",
+    });
   });
 
   it("CheckpointCreated with pre_restore_guard does not override latest rollback baseline", () => {

@@ -41,12 +41,10 @@ import {
 
 type PayloadRecord = Record<string, unknown> | undefined;
 
-// 模块级缓存:最新 verification 消息 ID 与最近完成的 tool_call ID
-// 用于避免每次 verification stage / checkpoint 事件都全量扫描 messages 数组
+// 模块级缓存最新 verification 消息 ID，避免每次 verification stage 事件都全量扫描 messages 数组。
 let _latestVerificationMsgId: string | undefined;
-let _latestDoneToolCallId: string | undefined;
 
-// 模块级缓存最新的 checkpoint_id，用于工具占位条目关联后续端到端 diff。
+// 模块级缓存最新的 checkpoint_id，用于文件变更面板关联后续端到端 diff。
 let _latestCheckpointId: string | undefined;
 let _latestRunDiffRequestId = 0;
 let _latestRestoreSyncRequestId = 0;
@@ -64,7 +62,6 @@ const CHECKPOINT_REASON_PRE_RESTORE_GUARD = "pre_restore_guard";
 export function resetEventBridgeCursors() {
   const keepCheckpointBaseline = useUIStore.getState().isRestoringCheckpoint;
   _latestVerificationMsgId = undefined;
-  _latestDoneToolCallId = undefined;
   _latestCheckpointId = keepCheckpointBaseline
     ? _latestCheckpointId
     : undefined;
@@ -741,8 +738,7 @@ export function handleGatewayEvent(
     }
 
     case EventType.ToolResult: {
-      const tcId = settleToolResultMessage(eventPayload);
-      _latestDoneToolCallId = tcId;
+      settleToolResultMessage(eventPayload);
       break;
     }
 
@@ -1095,12 +1091,6 @@ export function handleGatewayEvent(
       const payload = eventPayload as CheckpointCreatedPayload | undefined;
       if (payload) {
         insightStore.addCheckpointEvent(payload);
-        if (_latestDoneToolCallId) {
-          chatStore.attachCheckpointToToolCall(
-            _latestDoneToolCallId,
-            payload.checkpoint_id,
-          );
-        }
         if (payload.reason !== CHECKPOINT_REASON_PRE_RESTORE_GUARD) {
           _latestCheckpointId = payload.checkpoint_id;
         }
@@ -1153,7 +1143,6 @@ export function handleGatewayEvent(
             break;
           }
           useUIStore.getState().clearCheckpointRollbackUndo();
-          chatStore.markAllCheckpointsRestored();
           refreshSessionAfterCheckpointRestoreEvent(
             gatewayAPI,
             payload.session_id,
@@ -1183,7 +1172,6 @@ export function handleGatewayEvent(
             uiStore.showToast("Rollback undo completed", "success");
             break;
           }
-          chatStore.markAllCheckpointsAvailable();
           refreshSessionAfterCheckpointRestoreEvent(
             gatewayAPI,
             payload.session_id,

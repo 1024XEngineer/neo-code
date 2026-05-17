@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { type ChatMessage } from '@/stores/useChatStore'
 import { Loader2, Wrench, CheckCircle2, XCircle, ChevronRight } from 'lucide-react'
-import CheckpointInlineMark from './CheckpointInlineMark'
 
 interface ToolCallCardProps {
   message: ChatMessage
@@ -47,11 +46,6 @@ export default function ToolCallCard({ message, groupedWithPrev = false }: ToolC
           {isError && <XCircle size={12} style={styles.iconError} />}
           {argsSummary && <span style={styles.summary}>{argsSummary}</span>}
           {resultStats && <span style={styles.stats}>· {resultStats}</span>}
-          {message.checkpointId && (
-            <span style={{ marginLeft: 'auto' }}>
-              <CheckpointInlineMark checkpointId={message.checkpointId} status={message.checkpointStatus} />
-            </span>
-          )}
         </button>
         {expanded && (
           <div style={styles.detail}>

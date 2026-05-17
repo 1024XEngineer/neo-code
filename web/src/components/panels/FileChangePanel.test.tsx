@@ -23,7 +23,6 @@ const mockGatewayAPI = {
   undoRestore: vi.fn(),
   loadSession: vi.fn(),
   listSessionTodos: vi.fn(),
-  listCheckpoints: vi.fn(),
 };
 
 vi.mock("@/context/RuntimeProvider", () => ({
@@ -118,9 +117,6 @@ describe("FileChangePanel", () => {
     });
     mockGatewayAPI.listSessionTodos.mockResolvedValue({
       payload: { items: [] },
-    });
-    mockGatewayAPI.listCheckpoints.mockResolvedValue({
-      payload: [],
     });
     useChatStore.setState({ isGenerating: false } as never);
     useSessionStore.setState({ currentSessionId: "sess-1" } as never);
