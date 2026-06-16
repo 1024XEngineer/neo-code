@@ -43,6 +43,7 @@ workspace.xml
 .claude/
 .windsurf/
 .codebuddy/
+.agents/
 # VitePress / frontend build artifacts
 www/.vitepress/cache/
 www/.vitepress/dist/
