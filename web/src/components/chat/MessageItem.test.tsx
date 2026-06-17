@@ -242,4 +242,69 @@ describe("MessageItem", () => {
     });
     createObjectURL.mockRestore();
   });
+
+  it("renders user text attachments as chips with name and size", () => {
+    render(
+      <MessageItem
+        message={
+          {
+            id: "u2",
+            role: "user",
+            type: "text",
+            content: "read this",
+            timestamp: 1,
+            attachments: [
+              {
+                id: "att-text-1",
+                assetId: "asset-text-1",
+                mimeType: "text/markdown",
+                name: "notes.md",
+                size: 128,
+                kind: "text",
+              },
+            ],
+          } as any
+        }
+      />,
+    );
+
+    expect(screen.getByText("read this")).toBeInTheDocument();
+    // 文本附件以 chip 展示文件名和大小。
+    expect(screen.getByText("notes.md")).toBeInTheDocument();
+    expect(screen.getByText("128 B")).toBeInTheDocument();
+    // 文本附件不应渲染为 <img>。
+    expect(screen.queryByAltText("notes.md")).not.toBeInTheDocument();
+    // 文本附件不应触发 session asset 回载。
+    expect(mockFetchSessionAsset).not.toHaveBeenCalled();
+  });
+
+  it("infers text kind from mimeType when kind is missing for backward compat", () => {
+    render(
+      <MessageItem
+        message={
+          {
+            id: "u3",
+            role: "user",
+            type: "text",
+            content: "legacy",
+            timestamp: 1,
+            attachments: [
+              {
+                id: "att-legacy",
+                assetId: "asset-legacy",
+                mimeType: "application/json",
+                name: "data.json",
+                size: 2048,
+                // 缺省 kind，按 mimeType 前缀推断为 text。
+              },
+            ],
+          } as any
+        }
+      />,
+    );
+
+    expect(screen.getByText("data.json")).toBeInTheDocument();
+    expect(screen.getByText("2.0 KB")).toBeInTheDocument();
+    expect(screen.queryByAltText("data.json")).not.toBeInTheDocument();
+  });
 });

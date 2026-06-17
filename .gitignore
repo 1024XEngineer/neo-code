@@ -35,6 +35,8 @@ config.local.yaml
 data/
 .cache/
 .neocode/projects/**/.transcripts/
+.gocache/
+.gomodcache/
 
 # Editor/IDE
 .idea/

@@ -176,11 +176,12 @@ type RunParams struct {
 }
 ```
 
-- 多模态图片约束：
+- 多模态附件约束：
   - `type=image` 时 `media.mime_type` 必填。
   - `media.uri` 与 `media.asset_id` 必须二选一，不能同时为空或同时提供。
-  - `media.uri` 仅用于后端可读取的本地路径；Web 浏览器上传图片应先通过 `POST /api/session-assets` 保存，再在 `gateway.run` 中使用 `media.asset_id` 引用。
+  - `media.uri` 仅用于后端可读取的本地路径；Web 浏览器上传图片或文本应先通过 `POST /api/session-assets` 保存，再在 `gateway.run` 中使用 `media.asset_id` 引用。
   - `asset_id` 必须属于当前 `session_id`，不存在或跨 session 引用会在 runtime 输入准备阶段失败。
+  - 文本附件（如 `.md`、`.json`、`.csv`）使用 `type=image` + 真实文本 mime 表达，runtime 端按 `session.TextAssetWhitelist` 自动判定并内联为 user message 的 text part；无需新增 `type` 字段。详见 issue #701。
 
 - Response Schema:
   - Success（受理即返回）:
@@ -242,13 +243,15 @@ type RunParams struct {
 - Content-Type: `multipart/form-data`
 - Fields:
   - `session_id`: 目标会话 ID，必填。
-  - `file`: 图片文件，必填。
+  - `file`: 图片或文本文件，必填。
 - Server-side validation:
-  - 仅接受 `image/png`、`image/jpeg`、`image/webp`。
+  - 接受 `image/png`、`image/jpeg`、`image/webp`（按文件头嗅探）。
+  - 同时接受会话侧文本资产白名单内的扩展名（`.txt`、`.md`、`.json`、`.yaml`、`.yml`、`.csv`）与对应 MIME（`text/plain`、`text/markdown`、`application/json`、`text/yaml`、`application/x-yaml`、`text/csv`）。
+  - 文本资产额外校验 UTF-8，非 UTF-8 内容返回 `415`。
   - MIME 以服务端文件头检测结果为准，不信任浏览器声明。
   - 空文件返回 `400`。
-  - 超过 `MaxSessionAssetBytes` 返回 `413`。
-  - 非图片或不支持类型返回 `415`。
+  - 超过 `MaxSessionAssetBytes`（图片）或 `MaxTextAssetBytes`（文本）返回 `413`。
+  - 不在任一白名单内的类型返回 `415`。
   - 未认证返回 `401`，Origin/CORS 或 ACL 拒绝返回 `403`。
   - 工作区不存在返回 `404 workspace not found`；目标 session 不在该工作区返回 `404 session not found`。
 - Response:
@@ -261,6 +264,8 @@ type RunParams struct {
   "size": 1024
 }
 ```
+
+文本附件上传成功后，runtime 会在 `PrepareUserInput` 阶段按 `session.TextAssetWhitelist` 命中后自动读取并内联为 user message 的 `text` content part（带文件名边界 + 可选截断提示），Provider 层不感知"文件"概念。配置项 `runtime.assets.text_asset_enabled`（默认 `true`）可关闭该行为，关闭后文本附件会作为普通附件原样提交。详见 `docs/runtime-provider-event-flow.md` 与 issue #701。
 
 ### GET /api/session-assets/{session_id}/{asset_id}
 

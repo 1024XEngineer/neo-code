@@ -237,8 +237,9 @@ type TodoEventPayload struct {
 
 // InputNormalizedPayload 描述输入归一化完成后的摘要信息。
 type InputNormalizedPayload struct {
-	TextLength int `json:"text_length"`
-	ImageCount int `json:"image_count"`
+	TextLength     int `json:"text_length"`
+	ImageCount     int `json:"image_count"`
+	TextAssetCount int `json:"text_asset_count,omitempty"`
 }
 
 // AssetSavedPayload 描述单个附件成功保存后的结果。

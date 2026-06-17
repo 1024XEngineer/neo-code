@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { useComposerStore } from './useComposerStore'
+import { useComposerStore, resolveAttachmentKind } from './useComposerStore'
 
 beforeEach(() => {
   vi.restoreAllMocks()
@@ -77,5 +77,76 @@ describe('useComposerStore', () => {
       status: 'error',
       error: 'too large',
     })
+  })
+
+  it('adds text attachments with kind text and no preview URL', () => {
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:should-not-be-called')
+    const file = new File(['# title'], 'notes.md', { type: 'text/markdown' })
+
+    useComposerStore.getState().addAttachmentFiles([file])
+
+    const [attachment] = useComposerStore.getState().attachments
+    // 文本附件不应创建 blob URL，避免无意义内存占用。
+    expect(createObjectURL).not.toHaveBeenCalled()
+    expect(attachment).toMatchObject({
+      file,
+      previewUrl: '',
+      status: 'pending',
+      kind: 'text',
+    })
+  })
+
+  it('classifies text files by extension when browser omits MIME', () => {
+    // 浏览器对 .csv/.md 等扩展名常返回空 MIME，应按扩展名兜底判定为 text。
+    const file = new File(['a,b\n1,2'], 'data.csv', { type: '' })
+
+    useComposerStore.getState().addAttachmentFiles([file])
+
+    const [attachment] = useComposerStore.getState().attachments
+    expect(attachment.kind).toBe('text')
+    expect(attachment.previewUrl).toBe('')
+  })
+
+  it('keeps image attachments as kind image with preview URL', () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:preview-1')
+    useComposerStore.getState().addAttachmentFiles([new File(['img'], 'a.png', { type: 'image/png' })])
+
+    const [attachment] = useComposerStore.getState().attachments
+    expect(attachment.kind).toBe('image')
+    expect(attachment.previewUrl).toBe('blob:preview-1')
+  })
+
+  it('does not call revokeObjectURL when removing a text attachment', () => {
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    useComposerStore.getState().addAttachmentFiles([new File(['x'], 'a.md', { type: 'text/markdown' })])
+    const attachmentId = useComposerStore.getState().attachments[0].id
+
+    useComposerStore.getState().removeAttachment(attachmentId)
+
+    expect(useComposerStore.getState().attachments).toEqual([])
+    // 文本附件 previewUrl 为空，revokePreviewURL 会直接跳过。
+    expect(revokeObjectURL).not.toHaveBeenCalled()
+  })
+})
+
+describe('resolveAttachmentKind', () => {
+  it('classifies image MIME as image', () => {
+    expect(resolveAttachmentKind(new File([], 'a.png', { type: 'image/png' }))).toBe('image')
+  })
+
+  it('classifies text MIME as text', () => {
+    expect(resolveAttachmentKind(new File([], 'a.md', { type: 'text/markdown' }))).toBe('text')
+  })
+
+  it('classifies by extension when MIME is empty', () => {
+    expect(resolveAttachmentKind(new File([], 'data.csv', { type: '' }))).toBe('text')
+  })
+
+  it('returns unknown for unsupported types like PDF', () => {
+    expect(resolveAttachmentKind(new File([], 'doc.pdf', { type: 'application/pdf' }))).toBe('unknown')
+  })
+
+  it('returns unknown for binary with no recognized extension', () => {
+    expect(resolveAttachmentKind(new File([], 'archive.zip', { type: 'application/zip' }))).toBe('unknown')
   })
 })

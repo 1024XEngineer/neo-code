@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { formatSessionTime, parseDateTime, relativeTime } from './format'
+import { formatBytes, formatSessionTime, parseDateTime, relativeTime } from './format'
 
 describe('relativeTime', () => {
   beforeEach(() => {
@@ -55,5 +55,29 @@ describe('formatSessionTime', () => {
 
   it('returns original text for invalid input', () => {
     expect(formatSessionTime('not-a-time')).toBe('not-a-time')
+  })
+})
+
+describe('formatBytes', () => {
+  it('returns 0 B for zero or undefined', () => {
+    expect(formatBytes(0)).toBe('0 B')
+    expect(formatBytes(undefined)).toBe('0 B')
+    expect(formatBytes(-1)).toBe('0 B')
+  })
+
+  it('formats bytes below 1024 as B', () => {
+    expect(formatBytes(1)).toBe('1 B')
+    expect(formatBytes(512)).toBe('512 B')
+    expect(formatBytes(1023)).toBe('1023 B')
+  })
+
+  it('formats bytes between 1 KiB and 1 MiB as KB', () => {
+    expect(formatBytes(1024)).toBe('1.0 KB')
+    expect(formatBytes(2048)).toBe('2.0 KB')
+  })
+
+  it('formats bytes above 1 MiB as MB', () => {
+    expect(formatBytes(1024 * 1024)).toBe('1.0 MB')
+    expect(formatBytes(256 * 1024)).toBe('256.0 KB')
   })
 })

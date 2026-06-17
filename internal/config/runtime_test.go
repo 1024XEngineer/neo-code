@@ -19,6 +19,24 @@ func TestRuntimeConfigCloneAndDefaults(t *testing.T) {
 	}
 }
 
+// TestRuntimeAssetsConfigApplyDefaultsNilAsTrue 验证当 defaults.TextAssetEnabled 为 nil 时，
+// ApplyDefaults 将 TextAssetEnabled 设为 true，与 IsTextAssetEnabled() 的 nil-as-true 语义对齐。
+func TestRuntimeAssetsConfigApplyDefaultsNilAsTrue(t *testing.T) {
+	t.Parallel()
+
+	var zero RuntimeAssetsConfig
+	zero.ApplyDefaults(RuntimeAssetsConfig{})
+	if zero.TextAssetEnabled == nil {
+		t.Fatal("expected TextAssetEnabled to be non-nil after ApplyDefaults")
+	}
+	if !*zero.TextAssetEnabled {
+		t.Fatalf("expected TextAssetEnabled default true, got false")
+	}
+	if !zero.IsTextAssetEnabled() {
+		t.Fatalf("expected IsTextAssetEnabled() true, got false")
+	}
+}
+
 func TestRuntimeConfigValidate(t *testing.T) {
 	t.Parallel()
 

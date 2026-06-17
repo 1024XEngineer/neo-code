@@ -5,13 +5,17 @@ import { useSessionStore, isValidSessionId } from '@/stores/useSessionStore'
 import { useUIStore } from '@/stores/useUIStore'
 import {
   acceptedImageMimeTypes,
+  acceptedTextMimeTypes,
+  acceptedTextExtensions,
   maxComposerAttachmentBytes,
+  maxTextAttachmentBytes,
+  resolveAttachmentKind,
   useComposerStore,
   type ComposerAttachment,
 } from '@/stores/useComposerStore'
 import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
-import { formatTokenCount } from '@/utils/format'
+import { formatTokenCount, formatBytes } from '@/utils/format'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import { type ModelEntry } from '@/api/protocol'
 import {
@@ -26,7 +30,7 @@ import {
 import SlashCommandMenu from './SlashCommandMenu'
 import SkillPicker from './SkillPicker'
 import ModelSelector from './ModelSelector'
-import { ImagePlus, Loader2, Send, Square, X } from 'lucide-react'
+import { FileText, ImagePlus, Loader2, Send, Square, X } from 'lucide-react'
 
 const slashMenuAnchorStyle: React.CSSProperties = {
   position: 'absolute',
@@ -370,7 +374,8 @@ export default function ChatInput() {
       if (handled) return
     }
 
-    if (pendingAttachments.length > 0 && currentImageInput === 'unsupported') {
+    // 仅当存在图片附件且模型不支持图片时才阻断；文本附件不依赖视觉能力。
+    if (pendingAttachments.some((a) => a.kind === 'image') && currentImageInput === 'unsupported') {
       useUIStore.getState().showToast(unsupportedImageInputMessage, 'error')
       return
     }
@@ -409,6 +414,7 @@ export default function ChatInput() {
         name: attachment.file.name,
         size: meta.size,
         previewUrl: attachment.previewUrl,
+        kind: attachment.kind,
       })))
 
       setText('')
@@ -514,23 +520,44 @@ export default function ChatInput() {
   }
 
   function handleFilesSelected(files: FileList | File[]) {
-    if (currentImageInput === 'unsupported') {
-      useUIStore.getState().showToast(unsupportedImageInputMessage, 'error')
-      return
-    }
+    // 文本附件不依赖模型视觉能力，任何模型都可接收；仅图片附件受 currentImageInput 约束。
+    const imageUnsupported = currentImageInput === 'unsupported'
     const accepted: File[] = []
     for (const file of Array.from(files)) {
-      if (!acceptedImageMimeTypes.includes(file.type as any)) {
-        useUIStore.getState().showToast('Only PNG, JPEG, and WebP images are supported', 'error')
-        continue
-      }
       if (file.size <= 0) {
         useUIStore.getState().showToast('Cannot upload an empty file', 'error')
         continue
       }
-      if (file.size > maxComposerAttachmentBytes) {
-        useUIStore.getState().showToast('Image exceeds the 20 MiB limit', 'error')
+      const kind = resolveAttachmentKind(file)
+      if (kind === 'unknown') {
+        useUIStore.getState().showToast('Unsupported file type', 'error')
         continue
+      }
+      if (kind === 'image') {
+        if (imageUnsupported) {
+          useUIStore.getState().showToast(unsupportedImageInputMessage, 'error')
+          continue
+        }
+        if (!acceptedImageMimeTypes.includes(file.type as any)) {
+          useUIStore.getState().showToast('Only PNG, JPEG, and WebP images are supported', 'error')
+          continue
+        }
+        if (file.size > maxComposerAttachmentBytes) {
+          useUIStore.getState().showToast('Image exceeds the 20 MiB limit', 'error')
+          continue
+        }
+      } else {
+        // 文本附件：按 MIME 或扩展名校验白名单，并施加 256 KiB 字节上限。
+        const isTextMime = (acceptedTextMimeTypes as readonly string[]).includes((file.type || '').toLowerCase())
+        const isTextExt = acceptedTextExtensions.some((ext) => file.name.toLowerCase().endsWith(ext))
+        if (!isTextMime && !isTextExt) {
+          useUIStore.getState().showToast('Unsupported file type', 'error')
+          continue
+        }
+        if (file.size > maxTextAttachmentBytes) {
+          useUIStore.getState().showToast('Text file exceeds the 256 KiB limit', 'error')
+          continue
+        }
       }
       accepted.push(file)
     }
@@ -608,7 +635,7 @@ export default function ChatInput() {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/png,image/jpeg,image/webp"
+                  accept="image/png,image/jpeg,image/webp,.txt,.md,.json,.yaml,.yml,.csv"
                   multiple
                   style={{ display: 'none' }}
                   onChange={(e) => {
@@ -618,15 +645,11 @@ export default function ChatInput() {
                 />
                 <button
                   type="button"
-                  aria-label="添加图片"
-                  title={currentImageInput === 'unsupported' ? unsupportedImageInputMessage : '添加图片'}
-                  disabled={controlsLocked || currentImageInput === 'unsupported'}
-                  style={iconButtonStyle(controlsLocked || currentImageInput === 'unsupported')}
+                  aria-label="添加附件"
+                  title={currentImageInput === 'unsupported' ? '当前模型不支持图片，可添加文本文件' : '添加图片或文本文件'}
+                  disabled={controlsLocked}
+                  style={iconButtonStyle(controlsLocked)}
                   onClick={() => {
-                    if (currentImageInput === 'unsupported') {
-                      useUIStore.getState().showToast(unsupportedImageInputMessage, 'error')
-                      return
-                    }
                     fileInputRef.current?.click()
                   }}
                 >
@@ -739,6 +762,8 @@ async function cleanupUploadedSessionAssets(
   )))
 }
 
+// formatBytes 已提取到 @/utils/format，composer 与消息历史共用同一实现。
+
 function AttachmentPreview({
   attachments,
   onRemove,
@@ -749,29 +774,43 @@ function AttachmentPreview({
   if (attachments.length === 0) return null
   return (
     <div style={attachmentPreviewStyles.wrap}>
-      {attachments.map((attachment) => (
-        <div key={attachment.id} style={attachmentPreviewStyles.item}>
-          {attachment.previewUrl ? (
-            <img src={attachment.previewUrl} alt={attachment.file.name} style={attachmentPreviewStyles.image} />
-          ) : (
-            <div style={attachmentPreviewStyles.placeholder}>image</div>
-          )}
-          {attachment.status === 'uploading' && (
-            <div style={attachmentPreviewStyles.overlay}><Loader2 size={16} className="animate-spin" /></div>
-          )}
-          <button
-            type="button"
-            aria-label={`删除 ${attachment.file.name}`}
-            title="删除图片"
-            style={attachmentPreviewStyles.remove}
-            onClick={() => onRemove(attachment.id)}
-            disabled={attachment.status === 'uploading'}
+      {attachments.map((attachment) => {
+        const isText = attachment.kind === 'text'
+        return (
+          <div
+            key={attachment.id}
+            style={isText ? attachmentPreviewStyles.textItem : attachmentPreviewStyles.item}
           >
-            <X size={13} />
-          </button>
-          {attachment.error && <div style={attachmentPreviewStyles.error}>{attachment.error}</div>}
-        </div>
-      ))}
+            {isText ? (
+              <div style={attachmentPreviewStyles.textChip}>
+                <FileText size={14} style={{ flexShrink: 0 }} />
+                <span style={attachmentPreviewStyles.textName} title={attachment.file.name}>
+                  {attachment.file.name}
+                </span>
+                <span style={attachmentPreviewStyles.textSize}>{formatBytes(attachment.file.size)}</span>
+              </div>
+            ) : attachment.previewUrl ? (
+              <img src={attachment.previewUrl} alt={attachment.file.name} style={attachmentPreviewStyles.image} />
+            ) : (
+              <div style={attachmentPreviewStyles.placeholder}>image</div>
+            )}
+            {attachment.status === 'uploading' && (
+              <div style={attachmentPreviewStyles.overlay}><Loader2 size={16} className="animate-spin" /></div>
+            )}
+            <button
+              type="button"
+              aria-label={`删除 ${attachment.file.name}`}
+              title={isText ? '删除文本文件' : '删除图片'}
+              style={attachmentPreviewStyles.remove}
+              onClick={() => onRemove(attachment.id)}
+              disabled={attachment.status === 'uploading'}
+            >
+              <X size={13} />
+            </button>
+            {attachment.error && <div style={attachmentPreviewStyles.error}>{attachment.error}</div>}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -791,6 +830,38 @@ const attachmentPreviewStyles: Record<string, React.CSSProperties> = {
     border: '1px solid var(--border-primary)',
     background: 'var(--bg-secondary)',
     overflow: 'hidden',
+  },
+  // 文本附件 chip：自适应宽度，展示文件名+大小，与图片缩略图区分。
+  textItem: {
+    position: 'relative',
+    maxWidth: 260,
+    height: 32,
+    borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--border-primary)',
+    background: 'var(--bg-secondary)',
+    overflow: 'hidden',
+    display: 'flex',
+    alignItems: 'center',
+  },
+  textChip: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '0 28px 0 8px',
+    width: '100%',
+    height: '100%',
+    color: 'var(--text-primary)',
+    fontSize: 12,
+  },
+  textName: {
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  textSize: {
+    flexShrink: 0,
+    color: 'var(--text-tertiary)',
+    fontSize: 11,
   },
   image: {
     width: '100%',

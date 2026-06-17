@@ -647,8 +647,20 @@ func TestNetworkServerSessionAssetUploadErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("non image", func(t *testing.T) {
-		request := newSessionAssetUploadRequest(t, "session-1", "bad.txt", []byte("not an image"))
+	t.Run("non whitelisted binary content rejected", func(t *testing.T) {
+		// 使用二进制内容：既不是图片，content-sniffing 也不会命中 text/* 白名单。
+		request := newSessionAssetUploadRequest(t, "session-1", "blob.bin", []byte{0xFF, 0xFE, 0x00, 0x01})
+		request.Header.Set("Authorization", "Bearer gateway-token")
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnsupportedMediaType {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnsupportedMediaType)
+		}
+	})
+
+	t.Run("non utf8 text asset is rejected", func(t *testing.T) {
+		// 0xC3 0x28 是非法 UTF-8 序列；扩展名 .txt 在白名单内，但 UTF-8 校验应拒绝。
+		request := newSessionAssetUploadRequest(t, "session-1", "broken.txt", []byte{0xC3, 0x28, 0xA0, 0xA1})
 		request.Header.Set("Authorization", "Bearer gateway-token")
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, request)
@@ -679,6 +691,36 @@ func TestNetworkServerSessionAssetUploadErrors(t *testing.T) {
 		handler.ServeHTTP(recorder, request)
 		if recorder.Code != http.StatusRequestEntityTooLarge {
 			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusRequestEntityTooLarge)
+		}
+	})
+
+	t.Run("oversized text file rejected before save", func(t *testing.T) {
+		// 超过 256 KiB 文本上限的 .csv 文件应在网关层提前拒绝，不调用 SaveSessionAsset。
+		saveCalled := false
+		textPort := &runtimePortEventStub{
+			saveAssetFn: func(context.Context, SaveSessionAssetInput) (SessionAssetMeta, error) {
+				saveCalled = true
+				return SessionAssetMeta{}, nil
+			},
+		}
+		textHandler := server.withCORS(server.buildHandler(textPort))
+		request := newSessionAssetUploadRequest(
+			t,
+			"session-1",
+			"big.csv",
+			bytes.Repeat([]byte("a"), int(agentsession.DefaultMaxTextAssetBytes)+1),
+		)
+		request.Header.Set("Authorization", "Bearer gateway-token")
+		recorder := httptest.NewRecorder()
+		textHandler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusRequestEntityTooLarge)
+		}
+		if !strings.Contains(recorder.Body.String(), "text asset exceeds size limit") {
+			t.Fatalf("body = %s, want text asset exceeds size limit", recorder.Body.String())
+		}
+		if saveCalled {
+			t.Fatalf("SaveSessionAsset should not be called for oversized text file")
 		}
 	})
 
@@ -1824,6 +1866,80 @@ func gatewayMinimalPNGBytes() []byte {
 		0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92,
 		0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
 		0x44, 0xae, 0x42, 0x60, 0x82,
+	}
+}
+
+// TestDetectAllowedUploadTextMime 直接覆盖文本附件 MIME 嗅探的各分支，
+// 重点验证 content-sniffing 回退路径剥离 "; charset=utf-8" 参数后能命中白名单。
+func TestDetectAllowedUploadTextMime(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  []byte
+		fileName string
+		want     string
+	}{
+		{
+			name:     "txt extension success",
+			payload:  []byte("hello world"),
+			fileName: "note.txt",
+			want:     "text/plain",
+		},
+		{
+			name:     "md extension success",
+			payload:  []byte("# title"),
+			fileName: "readme.md",
+			want:     "text/markdown",
+		},
+		{
+			name:     "csv extension success",
+			payload:  []byte("a,b\n1,2"),
+			fileName: "data.csv",
+			want:     "text/csv",
+		},
+		{
+			name:     "json extension success",
+			payload:  []byte(`{"k":"v"}`),
+			fileName: "cfg.json",
+			want:     "application/json",
+		},
+		{
+			name:     "yaml extension success",
+			payload:  []byte("key: value"),
+			fileName: "conf.yaml",
+			want:     "text/yaml",
+		},
+		{
+			name:     "content sniffing strips charset param for extensionless text",
+			payload:  []byte("plain text without extension"),
+			fileName: "notes",
+			want:     "text/plain",
+		},
+		{
+			name:     "non utf8 payload rejected even with whitelisted extension",
+			payload:  []byte{0xC3, 0x28, 0xA0, 0xA1},
+			fileName: "broken.txt",
+			want:     "",
+		},
+		{
+			name:     "non text content rejected by sniffing",
+			payload:  []byte("<html></html>"),
+			fileName: "page",
+			want:     "",
+		},
+		{
+			name:     "empty payload rejected",
+			payload:  nil,
+			fileName: "empty.txt",
+			want:     "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := detectAllowedUploadTextMime(tt.payload, tt.fileName)
+			if got != tt.want {
+				t.Fatalf("detectAllowedUploadTextMime(%q, %q) = %q, want %q", tt.fileName, tt.payload, got, tt.want)
+			}
+		})
 	}
 }
 

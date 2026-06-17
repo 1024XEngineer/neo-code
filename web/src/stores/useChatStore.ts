@@ -7,6 +7,7 @@ import {
   type PlanArtifact,
 } from "@/api/protocol";
 import { resetEventBridgeCursors } from "@/utils/eventBridge";
+import type { AttachmentKind } from "@/stores/useComposerStore";
 
 export interface ChatAttachment {
   id: string;
@@ -17,6 +18,8 @@ export interface ChatAttachment {
   name?: string;
   size?: number;
   previewUrl?: string;
+  // 附件类别，用于消息展示区分图片缩略图与文本 chip；缺省时按 mimeType 前缀推断。
+  kind?: AttachmentKind;
 }
 
 /** 聊天消息 */

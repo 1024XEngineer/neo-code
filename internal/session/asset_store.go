@@ -22,16 +22,23 @@ type AssetStore interface {
 }
 
 // newAssetMeta 生成新的会话附件元数据，并校验 MIME 约束。
+// 接受 image/* 与会话侧 TextAssetWhitelist 命中的文本 MIME；其他输入返回明确错误。
 func newAssetMeta(mimeType string) (AssetMeta, error) {
 	normalized := strings.ToLower(strings.TrimSpace(mimeType))
 	if normalized == "" {
 		return AssetMeta{}, fmt.Errorf("session: asset mime type is empty")
 	}
-	if !strings.HasPrefix(normalized, "image/") {
-		return AssetMeta{}, fmt.Errorf("session: unsupported asset mime type %q", mimeType)
+	if strings.HasPrefix(normalized, "image/") {
+		return AssetMeta{
+			ID:       NewID("asset"),
+			MimeType: normalized,
+		}, nil
 	}
-	return AssetMeta{
-		ID:       NewID("asset"),
-		MimeType: normalized,
-	}, nil
+	if DefaultTextAssetWhitelist().LookupByMime(normalized) {
+		return AssetMeta{
+			ID:       NewID("asset"),
+			MimeType: normalized,
+		}, nil
+	}
+	return AssetMeta{}, fmt.Errorf("session: unsupported asset mime type %q", mimeType)
 }

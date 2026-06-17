@@ -490,22 +490,40 @@ func TestInputPreparerPrepareImagePathAndMimeValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("declared non image mime is rejected", func(t *testing.T) {
+	t.Run("declared non whitelisted mime is rejected", func(t *testing.T) {
+		// 非图片且非文本白名单的 mime（如 application/octet-stream）应被拒。
 		imagePath := filepath.Join(workdir, "declared-text.png")
 		if err := os.WriteFile(imagePath, minimalPNGBytes(), 0o644); err != nil {
 			t.Fatalf("write image: %v", err)
 		}
 
 		_, err := preparer.Prepare(context.Background(), PrepareInput{
-			Text:           "declared text",
-			Images:         []PrepareImageInput{{Path: imagePath, MimeType: "text/plain"}},
+			Text:           "declared unknown",
+			Images:         []PrepareImageInput{{Path: imagePath, MimeType: "application/octet-stream"}},
 			DefaultWorkdir: workdir,
 		})
 		if err == nil {
-			t.Fatalf("expected non-image mime error")
+			t.Fatalf("expected unsupported mime error")
 		}
 		if !strings.Contains(err.Error(), "is not an image") {
-			t.Fatalf("expected non-image mime error, got %v", err)
+			t.Fatalf("expected unsupported mime error, got %v", err)
+		}
+	})
+
+	t.Run("declared text mime is accepted via text path", func(t *testing.T) {
+		// 文本白名单内的 mime 应走文本附件路径，成功保存。
+		textPath := filepath.Join(workdir, "notes.md")
+		if err := os.WriteFile(textPath, []byte("# title"), 0o644); err != nil {
+			t.Fatalf("write text: %v", err)
+		}
+
+		_, err := preparer.Prepare(context.Background(), PrepareInput{
+			Text:           "with text asset",
+			Images:         []PrepareImageInput{{Path: textPath, MimeType: "text/markdown"}},
+			DefaultWorkdir: workdir,
+		})
+		if err != nil {
+			t.Fatalf("expected text asset to be accepted, got %v", err)
 		}
 	})
 

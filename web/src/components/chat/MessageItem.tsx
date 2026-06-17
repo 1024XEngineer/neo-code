@@ -1,12 +1,13 @@
 import { memo, useEffect, useState } from "react";
-import { type ChatMessage } from "@/stores/useChatStore";
+import { type ChatMessage, type ChatAttachment } from "@/stores/useChatStore";
 import { type PlanArtifact } from "@/api/protocol";
 import { useGatewayAPI } from "@/context/RuntimeProvider";
+import { formatBytes } from "@/utils/format";
 import ToolCallCard from "./ToolCallCard";
 import AcceptanceMessage from "./AcceptanceMessage";
 import CodeBlock from "./CodeBlock";
 import MarkdownContent from "./MarkdownContent";
-import { Bot, ChevronRight, ClipboardList, Info, Loader2 } from "lucide-react";
+import { Bot, ChevronRight, ClipboardList, FileText, Info, Loader2 } from "lucide-react";
 
 interface MessageItemProps {
   message: ChatMessage;
@@ -91,6 +92,14 @@ function UserMessage({ message }: { message: ChatMessage }) {
   );
 }
 
+// formatBytes 已提取到 @/utils/format，composer 与消息历史共用同一实现。
+
+// isImageAttachment 判定附件是否为图片类：优先使用显式 kind，缺省时按 mimeType 前缀推断（向后兼容）。
+function isImageAttachment(attachment: ChatAttachment): boolean {
+  if (attachment.kind) return attachment.kind === "image";
+  return (attachment.mimeType || "").toLowerCase().startsWith("image/");
+}
+
 function UserAttachments({ message }: { message: ChatMessage }) {
   const gatewayAPI = useGatewayAPI();
   const [loadedURLs, setLoadedURLs] = useState<Record<string, string>>({});
@@ -101,6 +110,8 @@ function UserAttachments({ message }: { message: ChatMessage }) {
     let cancelled = false;
     const created: string[] = [];
     attachments.forEach((attachment) => {
+      // 文本附件 chip 只展示文件名+大小，无需回载 blob；仅图片附件需要 fetch。
+      if (!isImageAttachment(attachment)) return;
       if (attachment.previewUrl || !attachment.sessionId || !attachment.assetId) return;
       gatewayAPI.fetchSessionAsset(attachment.sessionId, attachment.assetId, attachment.workspaceHash)
         .then((blob) => {
@@ -121,6 +132,18 @@ function UserAttachments({ message }: { message: ChatMessage }) {
   return (
     <div style={styles.userAttachmentGrid}>
       {attachments.map((attachment) => {
+        // 文本附件以 chip 形式展示文件名和大小，与图片缩略图区分。
+        if (!isImageAttachment(attachment)) {
+          return (
+            <div key={attachment.id} style={styles.userTextChip}>
+              <FileText size={14} style={{ flexShrink: 0 }} />
+              <span style={styles.userTextChipName} title={attachment.name || ""}>
+                {attachment.name || "text file"}
+              </span>
+              <span style={styles.userTextChipSize}>{formatBytes(attachment.size)}</span>
+            </div>
+          );
+        }
         const src = attachment.previewUrl || loadedURLs[attachment.id] || "";
         return (
           <div key={attachment.id} style={styles.userAttachmentThumb}>
@@ -425,6 +448,29 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--text-tertiary)",
     fontSize: 11,
     fontFamily: "var(--font-mono)",
+  },
+  // 文本附件 chip：展示文件名+大小，与图片缩略图视觉区分。
+  userTextChip: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "6px 10px",
+    borderRadius: "var(--radius-md)",
+    border: "1px solid var(--border-primary)",
+    background: "var(--bg-secondary)",
+    color: "var(--text-primary)",
+    fontSize: 12,
+    overflow: "hidden",
+  },
+  userTextChipName: {
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  userTextChipSize: {
+    flexShrink: 0,
+    color: "var(--text-tertiary)",
+    fontSize: 11,
   },
   aiRow: {
     display: "flex",

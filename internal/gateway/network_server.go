@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/net/websocket"
@@ -435,7 +436,7 @@ func (s *NetworkServer) handleSessionAssetUpload(writer http.ResponseWriter, req
 		return
 	}
 
-	file, _, err := request.FormFile("file")
+	file, fileHeader, err := request.FormFile("file")
 	if err != nil {
 		writeJSONResponse(writer, http.StatusBadRequest, map[string]string{"error": "file is required"})
 		return
@@ -443,6 +444,10 @@ func (s *NetworkServer) handleSessionAssetUpload(writer http.ResponseWriter, req
 	defer func() {
 		_ = file.Close()
 	}()
+	fileName := ""
+	if fileHeader != nil {
+		fileName = strings.TrimSpace(fileHeader.Filename)
+	}
 
 	payload, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
@@ -460,7 +465,18 @@ func (s *NetworkServer) handleSessionAssetUpload(writer http.ResponseWriter, req
 
 	mimeType := detectAllowedUploadImageMime(payload)
 	if mimeType == "" {
-		writeJSONResponse(writer, http.StatusUnsupportedMediaType, map[string]string{"error": "unsupported image type"})
+		// 文本附件走白名单嗅探：先按声明/扩展名匹配，再做 UTF-8 校验。
+		mimeType = detectAllowedUploadTextMime(payload, fileName)
+	}
+	if mimeType == "" {
+		writeJSONResponse(writer, http.StatusUnsupportedMediaType, map[string]string{"error": "unsupported asset type"})
+		return
+	}
+
+	// 文本附件走更严格的字节上限（256 KiB），在网关层提前拦截，避免大文本完整读入内存后才在 SaveAsset 深处被拒。
+	if agentsession.DefaultTextAssetWhitelist().LookupByMime(mimeType) &&
+		int64(len(payload)) > agentsession.DefaultMaxTextAssetBytes {
+		writeJSONResponse(writer, http.StatusRequestEntityTooLarge, map[string]string{"error": "text asset exceeds size limit"})
 		return
 	}
 
@@ -624,6 +640,46 @@ func detectAllowedUploadImageMime(payload []byte) string {
 	default:
 		return ""
 	}
+}
+
+// detectAllowedUploadTextMime 按会话侧文本资产白名单探测上传文件 MIME。
+// 流程：先按文件扩展名查 mime；若未命中则尝试从 payload 内容头推断（仅对纯文本类文件）。
+// 任一环节命中后必须再次校验 payload 是否为合法 UTF-8，非 UTF-8 返回空。
+// 与 detectAllowedUploadImageMime 并列，互不冲突。
+func detectAllowedUploadTextMime(payload []byte, fileName string) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	whitelist := agentsession.DefaultTextAssetWhitelist()
+	if whitelist.IsEmpty() {
+		return ""
+	}
+	mimeType := whitelist.LookupByExtension(fileName)
+	if mimeType == "" {
+		// 用 http.DetectContentType 做粗略内容嗅探；命中 text/* 即认为是文本。
+		probe := payload
+		if len(probe) > 512 {
+			probe = probe[:512]
+		}
+		detected := strings.ToLower(strings.TrimSpace(http.DetectContentType(probe)))
+		if !strings.HasPrefix(detected, "text/") {
+			return ""
+		}
+		// http.DetectContentType 对纯文本会返回 "text/plain; charset=utf-8"，
+		// 需剥离 "; charset=..." 参数后再与白名单对比，否则永远匹配失败。
+		mediaType := strings.TrimSpace(strings.SplitN(detected, ";", 2)[0])
+		// 仅接受白名单内的 mime，避免被任意 text/* 通过。
+		if !whitelist.LookupByMime(mediaType) {
+			return ""
+		}
+		mimeType = mediaType
+	}
+	// UTF-8 校验：文本资产进入 runtime 后会被读取并按 UTF-8 解码，非 UTF-8 会立刻失败。
+	// 提前在网关层拒绝，避免无效上传占用存储。
+	if !utf8.Valid(payload) {
+		return ""
+	}
+	return mimeType
 }
 
 // parseSessionAssetPath 从 /api/session-assets/{session_id}/{asset_id} 提取路径参数。
