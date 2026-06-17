@@ -473,13 +473,6 @@ func (s *NetworkServer) handleSessionAssetUpload(writer http.ResponseWriter, req
 		return
 	}
 
-	// 文本附件走更严格的字节上限（256 KiB），在网关层提前拦截，避免大文本完整读入内存后才在 SaveAsset 深处被拒。
-	if agentsession.DefaultTextAssetWhitelist().LookupByMime(mimeType) &&
-		int64(len(payload)) > agentsession.DefaultMaxTextAssetBytes {
-		writeJSONResponse(writer, http.StatusRequestEntityTooLarge, map[string]string{"error": "text asset exceeds size limit"})
-		return
-	}
-
 	meta, err := assetPort.SaveSessionAsset(sessionAssetRequestContext(request), SaveSessionAssetInput{
 		SubjectID: subjectID,
 		SessionID: sessionID,

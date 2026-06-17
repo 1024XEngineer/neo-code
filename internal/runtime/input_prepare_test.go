@@ -350,12 +350,25 @@ func TestServicePrepareUserInputRespectsTextAssetDisabledConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareUserInput() error = %v", err)
 	}
-	// 关闭开关时文本 asset 不被内联，保留为 image part。
-	if len(input.Parts) != 2 {
-		t.Fatalf("expected 2 parts, got %d: %+v", len(input.Parts), input.Parts)
+	// 关闭开关时文本 asset 被丢弃，只剩用户文本 part，不保留为会失败的 image part。
+	if len(input.Parts) != 1 {
+		t.Fatalf("expected 1 part (text only), got %d: %+v", len(input.Parts), input.Parts)
 	}
-	if input.Parts[1].Kind != providertypes.ContentPartImage {
-		t.Errorf("Parts[1].Kind = %q, want image (text inline disabled)", input.Parts[1].Kind)
+	if input.Parts[0].Kind != providertypes.ContentPartText {
+		t.Errorf("Parts[0].Kind = %q, want text (text asset dropped)", input.Parts[0].Kind)
+	}
+
+	// 先读到 EventError（文本 asset 被丢弃的通知），再读到 InputNormalized。
+	dropEvent := mustReadRuntimeEvent(t, svc.Events())
+	if dropEvent.Type != EventError {
+		t.Fatalf("expected EventError for dropped text asset, got %v", dropEvent.Type)
+	}
+	dropMsg, ok := dropEvent.Payload.(string)
+	if !ok {
+		t.Fatalf("unexpected drop event payload type: %T", dropEvent.Payload)
+	}
+	if !strings.Contains(dropMsg, "text asset dropped") || !strings.Contains(dropMsg, "text_asset_enabled=false") {
+		t.Errorf("drop event message = %q, want contains 'text asset dropped' and 'text_asset_enabled=false'", dropMsg)
 	}
 
 	event := mustReadRuntimeEvent(t, svc.Events())

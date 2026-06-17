@@ -145,3 +145,36 @@ func textAssetFileNameMap(images []UserImageInput) map[string]string {
 	}
 	return out
 }
+
+// dropTextAssetImageParts 在 text_asset_enabled=false 时把 prepared.Parts 里属于文本白名单的
+// session_asset image part 丢弃，避免非 image/* mime 进入 provider 的 image-source resolver 失败。
+// 复用 inlineTextSessionAssets 的识别条件（ContentPartImage + ImageSourceSessionAsset + whitelist），
+// 但丢弃而非读取替换。onDropped 钩子用于 emit 事件告知调用方，可为 nil。
+func dropTextAssetImageParts(
+	parts []providertypes.ContentPart,
+	policy agentsession.TextAssetPolicy,
+	onDropped func(assetID string, mime string),
+) []providertypes.ContentPart {
+	if len(parts) == 0 {
+		return parts
+	}
+	normalized := agentsession.NormalizeTextAssetPolicy(policy)
+	if normalized.Whitelist.IsEmpty() {
+		return parts
+	}
+	out := make([]providertypes.ContentPart, 0, len(parts))
+	for _, part := range parts {
+		// 只丢弃 session asset 类的文本 image part；图片 image part 和非 asset part 原样保留。
+		if part.Kind == providertypes.ContentPartImage && part.Image != nil &&
+			part.Image.SourceType == providertypes.ImageSourceSessionAsset &&
+			part.Image.Asset != nil && strings.TrimSpace(part.Image.Asset.ID) != "" &&
+			normalized.Whitelist.LookupByMime(part.Image.Asset.MimeType) {
+			if onDropped != nil {
+				onDropped(part.Image.Asset.ID, part.Image.Asset.MimeType)
+			}
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}

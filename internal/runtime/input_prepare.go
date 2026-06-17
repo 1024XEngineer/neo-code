@@ -77,15 +77,21 @@ func (s *Service) PrepareUserInput(ctx context.Context, input PrepareInput) (Use
 	}
 
 	// 文本附件内联：在提交会话前把 prepared.Parts 里的文本 asset 读取并替换为 text part。
-	// 关闭开关时跳过内联，文本 asset 仍作为 image part 进入 provider 链路（保留向后兼容）。
+	// 关闭开关时跳过内联，并把文本 asset 的 image part 丢弃，避免非 image/* mime 进入 provider 失败。
+	runID := strings.TrimSpace(input.RunID)
 	textAssetCount := 0
 	if textAssetEnabled {
 		inlineResult := s.inlineUserInputTextAssets(ctx, prepared.UserInput.SessionID, input, prepared.UserInput.Parts, textAssetPolicy)
 		prepared.UserInput.Parts = inlineResult.Parts
 		textAssetCount = inlineResult.Inlined
+	} else {
+		// text_asset_enabled=false：丢弃文本 asset image part，emit EventError 告知用户。
+		prepared.UserInput.Parts = dropTextAssetImageParts(prepared.UserInput.Parts, textAssetPolicy, func(assetID string, mime string) {
+			_ = s.emitPrepareEvent(ctx, EventError, runID, prepared.UserInput.SessionID,
+				"text asset dropped (text_asset_enabled=false): asset_id="+assetID+" mime="+mime)
+		})
 	}
 
-	runID := strings.TrimSpace(input.RunID)
 	_ = s.emitPrepareEvent(ctx, EventInputNormalized, runID, prepared.UserInput.SessionID, InputNormalizedPayload{
 		TextLength:     len([]rune(strings.TrimSpace(input.Text))),
 		ImageCount:     len(input.Images),

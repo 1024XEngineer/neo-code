@@ -694,36 +694,6 @@ func TestNetworkServerSessionAssetUploadErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("oversized text file rejected before save", func(t *testing.T) {
-		// 超过 256 KiB 文本上限的 .csv 文件应在网关层提前拒绝，不调用 SaveSessionAsset。
-		saveCalled := false
-		textPort := &runtimePortEventStub{
-			saveAssetFn: func(context.Context, SaveSessionAssetInput) (SessionAssetMeta, error) {
-				saveCalled = true
-				return SessionAssetMeta{}, nil
-			},
-		}
-		textHandler := server.withCORS(server.buildHandler(textPort))
-		request := newSessionAssetUploadRequest(
-			t,
-			"session-1",
-			"big.csv",
-			bytes.Repeat([]byte("a"), int(agentsession.DefaultMaxTextAssetBytes)+1),
-		)
-		request.Header.Set("Authorization", "Bearer gateway-token")
-		recorder := httptest.NewRecorder()
-		textHandler.ServeHTTP(recorder, request)
-		if recorder.Code != http.StatusRequestEntityTooLarge {
-			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusRequestEntityTooLarge)
-		}
-		if !strings.Contains(recorder.Body.String(), "text asset exceeds size limit") {
-			t.Fatalf("body = %s, want text asset exceeds size limit", recorder.Body.String())
-		}
-		if saveCalled {
-			t.Fatalf("SaveSessionAsset should not be called for oversized text file")
-		}
-	})
-
 	t.Run("workspace not found", func(t *testing.T) {
 		runtimePort := &runtimePortEventStub{
 			saveAssetFn: func(context.Context, SaveSessionAssetInput) (SessionAssetMeta, error) {
