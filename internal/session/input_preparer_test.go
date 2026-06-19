@@ -490,22 +490,40 @@ func TestInputPreparerPrepareImagePathAndMimeValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("declared non image mime is rejected", func(t *testing.T) {
+	t.Run("declared non whitelisted mime is rejected", func(t *testing.T) {
+		// 非图片且非文本白名单的 mime（如 application/octet-stream）应被拒。
 		imagePath := filepath.Join(workdir, "declared-text.png")
 		if err := os.WriteFile(imagePath, minimalPNGBytes(), 0o644); err != nil {
 			t.Fatalf("write image: %v", err)
 		}
 
 		_, err := preparer.Prepare(context.Background(), PrepareInput{
-			Text:           "declared text",
-			Images:         []PrepareImageInput{{Path: imagePath, MimeType: "text/plain"}},
+			Text:           "declared unknown",
+			Images:         []PrepareImageInput{{Path: imagePath, MimeType: "application/octet-stream"}},
 			DefaultWorkdir: workdir,
 		})
 		if err == nil {
-			t.Fatalf("expected non-image mime error")
+			t.Fatalf("expected unsupported mime error")
 		}
 		if !strings.Contains(err.Error(), "is not an image") {
-			t.Fatalf("expected non-image mime error, got %v", err)
+			t.Fatalf("expected unsupported mime error, got %v", err)
+		}
+	})
+
+	t.Run("declared text mime is accepted via text path", func(t *testing.T) {
+		// 文本白名单内的 mime 应走文本附件路径，成功保存。
+		textPath := filepath.Join(workdir, "notes.md")
+		if err := os.WriteFile(textPath, []byte("# title"), 0o644); err != nil {
+			t.Fatalf("write text: %v", err)
+		}
+
+		_, err := preparer.Prepare(context.Background(), PrepareInput{
+			Text:           "with text asset",
+			Images:         []PrepareImageInput{{Path: textPath, MimeType: "text/markdown"}},
+			DefaultWorkdir: workdir,
+		})
+		if err != nil {
+			t.Fatalf("expected text asset to be accepted, got %v", err)
 		}
 	})
 
@@ -555,6 +573,131 @@ func TestInputPreparerPrepareSavedAssetReferenceValidation(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mismatches saved asset") {
 		t.Fatalf("expected saved asset mismatch error, got %v", err)
+	}
+}
+
+func TestInputPreparerTextAssetPolicyAndReference(t *testing.T) {
+	t.Parallel()
+
+	var nilPreparer *InputPreparer
+	nilPreparer.SetTextAssetPolicy(TextAssetPolicy{})
+	if got := nilPreparer.textAssetPolicySnapshot(); got.MaxTextAssetBytes != DefaultMaxTextAssetBytes {
+		t.Fatalf("nil preparer policy = %+v, want defaults", got)
+	}
+
+	workdir := t.TempDir()
+	store := newInputPreparerTestStore(t, workdir)
+	session := NewWithWorkdir("text-reference", workdir)
+	if err := createSessionForPreparerTest(context.Background(), store, session); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	meta, err := store.SaveAsset(context.Background(), session.ID, strings.NewReader("# notes"), "text/markdown")
+	if err != nil {
+		t.Fatalf("SaveAsset() error = %v", err)
+	}
+
+	preparer := NewInputPreparer(store, store)
+	preparer.SetTextAssetPolicy(TextAssetPolicy{
+		Whitelist:         DefaultTextAssetWhitelist(),
+		MaxTextAssetBytes: 123,
+		MaxTextAssetChars: 456,
+	})
+	if got := preparer.textAssetPolicySnapshot(); got.MaxTextAssetBytes != 123 || got.MaxTextAssetChars != 456 {
+		t.Fatalf("textAssetPolicySnapshot() = %+v", got)
+	}
+	result, err := preparer.Prepare(context.Background(), PrepareInput{
+		SessionID:      session.ID,
+		Text:           "use notes",
+		Images:         []PrepareImageInput{{AssetID: meta.ID, MimeType: "text/markdown"}},
+		DefaultWorkdir: workdir,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if len(result.Parts) != 2 || result.Parts[1].Image == nil || result.Parts[1].Image.Asset == nil ||
+		result.Parts[1].Image.Asset.ID != meta.ID {
+		t.Fatalf("unexpected prepared text asset part: %+v", result.Parts)
+	}
+}
+
+func TestInputPreparerReferenceTextAssetErrors(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	store := newInputPreparerTestStore(t, workdir)
+	preparer := NewInputPreparer(store, store)
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := preparer.referenceTextAsset(canceled, "s1", "asset-1", "text/plain"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled reference error = %v, want context.Canceled", err)
+	}
+	if _, err := NewInputPreparer(store, nil).referenceTextAsset(context.Background(), "s1", "asset-1", "text/plain"); err == nil || !strings.Contains(err.Error(), "asset store is not configured") {
+		t.Fatalf("missing store error = %v", err)
+	}
+	if _, err := preparer.referenceTextAsset(context.Background(), "s1", " ", "text/plain"); err == nil || !strings.Contains(err.Error(), "text asset id is empty") {
+		t.Fatalf("empty asset id error = %v", err)
+	}
+	if _, err := preparer.referenceTextAsset(context.Background(), "missing-session", "asset-1", "text/plain"); err == nil || !strings.Contains(err.Error(), "stat text asset") {
+		t.Fatalf("missing asset error = %v", err)
+	}
+
+	session := NewWithWorkdir("reference-errors", workdir)
+	if err := createSessionForPreparerTest(context.Background(), store, session); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	imageMeta, err := store.SaveAsset(context.Background(), session.ID, bytes.NewReader(minimalPNGBytes()), "image/png")
+	if err != nil {
+		t.Fatalf("SaveAsset(image) error = %v", err)
+	}
+	if _, err := preparer.referenceTextAsset(context.Background(), session.ID, imageMeta.ID, ""); err == nil || !strings.Contains(err.Error(), "not in text asset whitelist") {
+		t.Fatalf("image reference error = %v", err)
+	}
+	textMeta, err := store.SaveAsset(context.Background(), session.ID, strings.NewReader("notes"), "text/plain")
+	if err != nil {
+		t.Fatalf("SaveAsset(text) error = %v", err)
+	}
+	if _, err := preparer.referenceTextAsset(context.Background(), session.ID, textMeta.ID, "text/markdown"); err == nil || !strings.Contains(err.Error(), "mismatches saved asset") {
+		t.Fatalf("declared mime mismatch error = %v", err)
+	}
+}
+
+func TestInputPreparerSaveTextAssetValidation(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	store := newInputPreparerTestStore(t, workdir)
+	preparer := NewInputPreparer(store, store)
+	session := NewWithWorkdir("save-text", workdir)
+	if err := createSessionForPreparerTest(context.Background(), store, session); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := preparer.saveTextAsset(canceled, session.ID, workdir, "notes.md", "text/markdown"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled save error = %v, want context.Canceled", err)
+	}
+	if _, err := preparer.saveTextAsset(context.Background(), session.ID, workdir, "../outside.md", "text/markdown"); err == nil {
+		t.Fatal("expected workdir escape to be rejected")
+	}
+	if _, err := preparer.saveTextAsset(context.Background(), session.ID, workdir, "missing.md", "text/markdown"); err == nil || !strings.Contains(err.Error(), "open text file") {
+		t.Fatalf("missing file error = %v", err)
+	}
+
+	path := filepath.Join(workdir, "notes.txt")
+	if err := os.WriteFile(path, []byte("notes"), 0o644); err != nil {
+		t.Fatalf("write text file: %v", err)
+	}
+	if _, err := preparer.saveTextAsset(context.Background(), session.ID, workdir, path, "application/octet-stream"); err == nil || !strings.Contains(err.Error(), "not in text asset whitelist") {
+		t.Fatalf("unsupported mime error = %v", err)
+	}
+	meta, err := preparer.saveTextAsset(context.Background(), session.ID, workdir, path, "")
+	if err != nil {
+		t.Fatalf("saveTextAsset(extension fallback) error = %v", err)
+	}
+	if meta.MimeType != "text/plain" {
+		t.Fatalf("saved mime = %q, want text/plain", meta.MimeType)
 	}
 }
 

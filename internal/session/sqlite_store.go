@@ -65,6 +65,7 @@ type SQLiteStore struct {
 	db          *sql.DB
 	limitsMu    sync.RWMutex
 	assetPolicy AssetPolicy
+	textPolicy  TextAssetPolicy
 }
 
 // SetAssetPolicy 设置会话附件大小限制；非法值会回退到默认并应用硬上限兜底。
@@ -77,6 +78,17 @@ func (s *SQLiteStore) SetAssetPolicy(policy AssetPolicy) {
 	s.limitsMu.Unlock()
 }
 
+// SetTextAssetPolicy 设置会话文本类附件的策略（白名单与大小/字符上限）。
+// 空值或非法值会回退到默认并应用硬上限兜底。
+func (s *SQLiteStore) SetTextAssetPolicy(policy TextAssetPolicy) {
+	if s == nil {
+		return
+	}
+	s.limitsMu.Lock()
+	s.textPolicy = NormalizeTextAssetPolicy(policy)
+	s.limitsMu.Unlock()
+}
+
 // assetPolicySnapshot 返回当前生效的会话附件限制。
 func (s *SQLiteStore) assetPolicySnapshot() AssetPolicy {
 	if s == nil {
@@ -86,6 +98,17 @@ func (s *SQLiteStore) assetPolicySnapshot() AssetPolicy {
 	policy := s.assetPolicy
 	s.limitsMu.RUnlock()
 	return NormalizeAssetPolicy(policy)
+}
+
+// textAssetPolicySnapshot 返回当前生效的会话文本附件策略。
+func (s *SQLiteStore) textAssetPolicySnapshot() TextAssetPolicy {
+	if s == nil {
+		return DefaultTextAssetPolicy()
+	}
+	s.limitsMu.RLock()
+	policy := s.textPolicy
+	s.limitsMu.RUnlock()
+	return NormalizeTextAssetPolicy(policy)
 }
 
 // Close 释放数据库连接，供测试和上层生命周期管理复用。
@@ -648,16 +671,22 @@ func (s *SQLiteStore) SaveAsset(ctx context.Context, sessionID string, r io.Read
 	}
 
 	policy := s.assetPolicySnapshot()
-	written, copyErr := io.Copy(tempFile, io.LimitReader(r, policy.MaxSessionAssetBytes+1))
+	textPolicy := s.textAssetPolicySnapshot()
+	// 文本 asset 走更严格的字节上限（避免 20 MiB 文本在单轮会话中击穿上下文预算）。
+	limit := policy.MaxSessionAssetBytes
+	if textPolicy.Whitelist.LookupByMime(meta.MimeType) {
+		limit = textPolicy.MaxTextAssetBytes
+	}
+	written, copyErr := io.Copy(tempFile, io.LimitReader(r, limit+1))
 	syncErr := tempFile.Sync()
 	closeErr := tempFile.Close()
 	if copyErr != nil {
 		_ = os.Remove(tempPath)
 		return AssetMeta{}, fmt.Errorf("session: write temp asset: %w", copyErr)
 	}
-	if written > policy.MaxSessionAssetBytes {
+	if written > limit {
 		_ = os.Remove(tempPath)
-		return AssetMeta{}, fmt.Errorf("session: asset size exceeds %d bytes", policy.MaxSessionAssetBytes)
+		return AssetMeta{}, fmt.Errorf("session: asset size exceeds %d bytes", limit)
 	}
 	if syncErr != nil {
 		_ = os.Remove(tempPath)

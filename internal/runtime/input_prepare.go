@@ -13,9 +13,13 @@ import (
 const prepareEventEmitTimeout = 200 * time.Millisecond
 
 // NewSessionInputPreparer 创建基于 session 子层实现的输入归一化适配器。
+// 文本附件策略（textPolicy）由 PrepareUserInput 在每次调用时通过 sessionTextPolicyInjectable
+// 重新注入；构造阶段使用 session 默认值兜底，避免未配置时走到 nil 路径。
 func NewSessionInputPreparer(store agentsession.Store, assetStore agentsession.AssetStore) UserInputPreparer {
+	preparer := agentsession.NewInputPreparer(store, assetStore)
+	preparer.SetTextAssetPolicy(agentsession.DefaultTextAssetPolicy())
 	return sessionInputPreparer{
-		preparer: agentsession.NewInputPreparer(store, assetStore),
+		preparer: preparer,
 	}
 }
 
@@ -44,13 +48,26 @@ func (s *Service) PrepareUserInput(ctx context.Context, input PrepareInput) (Use
 
 	defaultWorkdir := ""
 	sessionAssetPolicy := agentsession.DefaultAssetPolicy()
+	textAssetPolicy := agentsession.DefaultTextAssetPolicy()
+	textAssetEnabled := true
 	if s.configManager != nil {
 		cfg := s.configManager.Get()
 		defaultWorkdir = strings.TrimSpace(cfg.Workdir)
 		sessionAssetPolicy = cfg.Runtime.ResolveSessionAssetPolicy()
+		textAssetPolicy = cfg.Runtime.ResolveTextAssetPolicy()
+		textAssetEnabled = cfg.Runtime.IsTextAssetEnabled()
 	}
 	if limitAwareStore, ok := s.sessionAssetStore.(sessionAssetLimitStore); ok {
 		limitAwareStore.SetAssetPolicy(sessionAssetPolicy)
+		// 同步设置文本附件策略（与图片策略互不影响，按 mime 路由）。
+		if textAwareStore, okText := s.sessionAssetStore.(sessionTextAssetLimitStore); okText {
+			textAwareStore.SetTextAssetPolicy(textAssetPolicy)
+		}
+	}
+
+	// 同步把 text policy 注入到 user input preparer，让文本 asset 能被解析。
+	if injectable, ok := s.userInputPreparer.(sessionTextPolicyInjectable); ok {
+		injectable.SetTextAssetPolicy(textAssetPolicy)
 	}
 
 	prepared, err := s.userInputPreparer.Prepare(ctx, input, defaultWorkdir)
@@ -59,10 +76,26 @@ func (s *Service) PrepareUserInput(ctx context.Context, input PrepareInput) (Use
 		return UserInput{}, err
 	}
 
+	// 文本附件内联：在提交会话前把 prepared.Parts 里的文本 asset 读取并替换为 text part。
+	// 关闭开关时跳过内联，并把文本 asset 的 image part 丢弃，避免非 image/* mime 进入 provider 失败。
 	runID := strings.TrimSpace(input.RunID)
+	textAssetCount := 0
+	if textAssetEnabled {
+		inlineResult := s.inlineUserInputTextAssets(ctx, prepared.UserInput.SessionID, input, prepared.UserInput.Parts, textAssetPolicy)
+		prepared.UserInput.Parts = inlineResult.Parts
+		textAssetCount = inlineResult.Inlined
+	} else {
+		// text_asset_enabled=false：丢弃文本 asset image part，emit EventError 告知用户。
+		prepared.UserInput.Parts = dropTextAssetImageParts(prepared.UserInput.Parts, textAssetPolicy, func(assetID string, mime string) {
+			_ = s.emitPrepareEvent(ctx, EventError, runID, prepared.UserInput.SessionID,
+				"text asset dropped (text_asset_enabled=false): asset_id="+assetID+" mime="+mime)
+		})
+	}
+
 	_ = s.emitPrepareEvent(ctx, EventInputNormalized, runID, prepared.UserInput.SessionID, InputNormalizedPayload{
-		TextLength: len([]rune(strings.TrimSpace(input.Text))),
-		ImageCount: len(input.Images),
+		TextLength:     len([]rune(strings.TrimSpace(input.Text))),
+		ImageCount:     len(input.Images),
+		TextAssetCount: textAssetCount,
 	})
 	for index, asset := range prepared.SavedAssets {
 		path := ""
@@ -130,8 +163,27 @@ type sessionInputPreparer struct {
 	preparer *agentsession.InputPreparer
 }
 
+// SetTextAssetPolicy 注入文本附件策略到内部 session.InputPreparer。
+// 该方法用于实现 sessionTextPolicyInjectable 接口，注入过程对调用方透明。
+func (p sessionInputPreparer) SetTextAssetPolicy(policy agentsession.TextAssetPolicy) {
+	if p.preparer == nil {
+		return
+	}
+	p.preparer.SetTextAssetPolicy(policy)
+}
+
 type sessionAssetLimitStore interface {
 	SetAssetPolicy(policy agentsession.AssetPolicy)
+}
+
+type sessionTextAssetLimitStore interface {
+	SetTextAssetPolicy(policy agentsession.TextAssetPolicy)
+}
+
+// sessionTextPolicyInjectable 表示 user input preparer 支持运行时注入文本附件策略。
+// 引入这个内部接口是为了在不改动 UserInputPreparer 公开契约的前提下注入配置。
+type sessionTextPolicyInjectable interface {
+	SetTextAssetPolicy(policy agentsession.TextAssetPolicy)
 }
 
 // Prepare 将 runtime 输入 DTO 映射到 session 子层并返回标准 UserInput 结果。

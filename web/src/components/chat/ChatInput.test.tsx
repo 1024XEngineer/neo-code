@@ -179,7 +179,7 @@ describe('ChatInput', () => {
   it('renders the image attachment picker but keeps mention button absent', () => {
     render(<ChatInput />)
 
-    expect(screen.getByRole('button', { name: /添加图片/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /添加附件/ })).toBeInTheDocument()
     expect(screen.queryByTitle('引用上下文')).not.toBeInTheDocument()
   })
 
@@ -223,7 +223,7 @@ describe('ChatInput', () => {
     })
   })
 
-  it('blocks image selection when the selected model explicitly rejects images', async () => {
+  it('blocks image selection when the selected model rejects images but still allows text', async () => {
     mockGatewayAPI.listModels.mockResolvedValueOnce({
       payload: {
         models: [{
@@ -238,15 +238,23 @@ describe('ChatInput', () => {
     })
     render(<ChatInput />)
 
+    // 等待模型能力加载完成：按钮 title 切换为不支持图片的提示，作为同步信号。
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /添加图片/ })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /添加附件/ })).toHaveAttribute('title', '当前模型不支持图片，可添加文本文件')
     })
-    const file = new File(['img'], 'a.png', { type: 'image/png' })
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement
-    fireEvent.change(input, { target: { files: [file] } })
 
+    // 图片附件仍受模型视觉能力限制，被拒绝。
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File(['img'], 'a.png', { type: 'image/png' })] } })
     await waitFor(() => {
       expect(useComposerStore.getState().attachments).toHaveLength(0)
+    })
+
+    // 文本附件不依赖模型视觉能力，仍可添加。
+    fireEvent.change(input, { target: { files: [new File(['# hi'], 'note.md', { type: 'text/markdown' })] } })
+    await waitFor(() => {
+      expect(useComposerStore.getState().attachments).toHaveLength(1)
+      expect(useComposerStore.getState().attachments[0].kind).toBe('text')
     })
   })
 
@@ -266,8 +274,9 @@ describe('ChatInput', () => {
     render(<ChatInput />)
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /添加图片/ })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /添加附件/ })).toHaveAttribute('title', '当前模型不支持图片，可添加文本文件')
     })
+    // 直接塞入图片附件（绕过选择校验），验证发送阶段对图片附件的阻断。
     useComposerStore.getState().addAttachmentFiles([new File(['img'], 'a.png', { type: 'image/png' })])
     fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
 
@@ -275,6 +284,58 @@ describe('ChatInput', () => {
       expect(mockGatewayAPI.createSession).not.toHaveBeenCalled()
       expect(mockGatewayAPI.uploadSessionAsset).not.toHaveBeenCalled()
       expect(mockGatewayAPI.run).not.toHaveBeenCalled()
+    })
+  })
+
+  it('uploads selected text file and sends it as an image part with the real text mime', async () => {
+    useSessionStore.setState({ currentSessionId: 'session-1' } as never)
+    mockGatewayAPI.uploadSessionAsset.mockResolvedValueOnce({
+      session_id: 'session-1',
+      asset_id: 'asset-text-1',
+      mime_type: 'text/markdown',
+      size: 5,
+    })
+    render(<ChatInput />)
+
+    const file = new File(['# hi'], 'note.md', { type: 'text/markdown' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [file] } })
+
+    // 文本附件以 chip 形式预览，展示文件名。
+    await waitFor(() => {
+      expect(screen.getByText('note.md')).toBeInTheDocument()
+    })
+
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.uploadSessionAsset).toHaveBeenCalledWith('session-1', file, 'workspace-b')
+      // 文本附件复用 type:'image' + 真实文本 mime，由 runtime 按白名单内联为 text part。
+      expect(mockGatewayAPI.run).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        input_parts: [
+          { type: 'image', media: { asset_id: 'asset-text-1', mime_type: 'text/markdown', file_name: 'note.md' } },
+        ],
+        mode: 'build',
+      })
+    })
+
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      role: 'user',
+      attachments: [{ assetId: 'asset-text-1', kind: 'text', name: 'note.md' }],
+    })
+  })
+
+  it('rejects unsupported file types with a clear error', async () => {
+    render(<ChatInput />)
+
+    const file = new File(['%PDF-1.4'], 'doc.pdf', { type: 'application/pdf' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [file] } })
+
+    await waitFor(() => {
+      // 未知类型应被拒绝，不进入附件列表。
+      expect(useComposerStore.getState().attachments).toHaveLength(0)
     })
   })
 

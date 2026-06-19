@@ -48,6 +48,9 @@ runtime:
   assets:
     max_session_asset_bytes: 20971520
     max_session_assets_total_bytes: 20971520
+    text_asset_enabled: true
+    max_text_asset_bytes: 262144       # 256 KiB
+    max_text_asset_chars: 250000       # ~25 万 UTF-8 字符
 
 tools:
   webfetch:
@@ -112,6 +115,9 @@ context:
 | `runtime.hooks.items` | user hooks 列表；支持 `builtin/sync` 与 `http/observe` 两种子类型 |
 | `runtime.assets.max_session_asset_bytes` | 单个 `session_asset` 最大原始字节数，默认 `20971520`（20 MiB）；`0` 或未配置时回退默认值 |
 | `runtime.assets.max_session_assets_total_bytes` | 单次请求可携带的 `session_asset` 原始总字节上限，默认 `20971520`（20 MiB）；`0` 或未配置时回退默认值 |
+| `runtime.assets.text_asset_enabled` | 是否把文本类 asset 在提交会话前内联为 text part，默认 `true`；关闭后文本 asset 走原图片路径（回滚开关） |
+| `runtime.assets.max_text_asset_bytes` | 单个文本 asset 最大字节数，默认 `262144`（256 KiB），硬上限 `4 MiB`；超过保存时返回 413 |
+| `runtime.assets.max_text_asset_chars` | 单个文本 asset 在 UTF-8 解码后的最大字符数，默认 `250000`，硬上限 `4_000_000`；超过时截断并保留截断提示 |
 
 ### `runtime.hooks.items` 字段约束
 

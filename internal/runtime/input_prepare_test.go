@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -228,4 +229,161 @@ func minimalPNGBytesForRuntimeTest() []byte {
 		0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
 		0x44, 0xae, 0x42, 0x60, 0x82,
 	}
+}
+
+func TestServicePrepareUserInputInlinesTextAssetAndReportsCount(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	svc, _ := newPrepareTestService(t, workdir, true)
+
+	textPath := filepath.Join(workdir, "notes.md")
+	if err := os.WriteFile(textPath, []byte("# Title\nbody content"), 0o644); err != nil {
+		t.Fatalf("write text: %v", err)
+	}
+
+	input, err := svc.PrepareUserInput(context.Background(), PrepareInput{
+		RunID:  "run-prepare-text-1",
+		Text:   "user query",
+		Images: []UserImageInput{{Path: textPath, MimeType: "text/markdown"}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareUserInput() error = %v", err)
+	}
+	if len(input.Parts) != 2 {
+		t.Fatalf("expected 2 parts (user text + inlined markdown), got %d", len(input.Parts))
+	}
+	// 第一个 part 是用户文本；第二个 part 应是 markdown 内容（被内联为 text part）。
+	if input.Parts[0].Kind != providertypes.ContentPartText {
+		t.Errorf("Parts[0].Kind = %q, want text", input.Parts[0].Kind)
+	}
+	if input.Parts[1].Kind != providertypes.ContentPartText {
+		t.Errorf("Parts[1].Kind = %q, want text (inlined from text/markdown asset)", input.Parts[1].Kind)
+	}
+	if !strings.Contains(input.Parts[1].Text, "# Title") {
+		t.Errorf("Parts[1].Text = %q, want to contain markdown content", input.Parts[1].Text)
+	}
+
+	// 第一个事件必须是 input_normalized，TextAssetCount = 1。
+	event := mustReadRuntimeEvent(t, svc.Events())
+	if event.Type != EventInputNormalized {
+		t.Fatalf("expected event %q, got %q", EventInputNormalized, event.Type)
+	}
+	payload, ok := event.Payload.(InputNormalizedPayload)
+	if !ok {
+		t.Fatalf("unexpected payload type: %T", event.Payload)
+	}
+	if payload.TextAssetCount != 1 {
+		t.Errorf("TextAssetCount = %d, want 1", payload.TextAssetCount)
+	}
+	if payload.TextLength == 0 {
+		t.Errorf("TextLength = 0, want > 0")
+	}
+}
+
+func TestServicePrepareUserInputMixedTextAndImageAssets(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	svc, _ := newPrepareTestService(t, workdir, true)
+
+	imagePath := filepath.Join(workdir, "img.png")
+	if err := os.WriteFile(imagePath, minimalPNGBytesForRuntimeTest(), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+	textPath := filepath.Join(workdir, "data.json")
+	if err := os.WriteFile(textPath, []byte(`{"k":"v"}`), 0o644); err != nil {
+		t.Fatalf("write text: %v", err)
+	}
+
+	input, err := svc.PrepareUserInput(context.Background(), PrepareInput{
+		RunID: "run-prepare-mixed-1",
+		Text:  "user query",
+		Images: []UserImageInput{
+			{Path: imagePath, MimeType: "image/png"},
+			{Path: textPath, MimeType: "application/json"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PrepareUserInput() error = %v", err)
+	}
+	// 期望：user text + image asset + inlined json text = 3 parts。
+	if len(input.Parts) != 3 {
+		t.Fatalf("expected 3 parts, got %d: %+v", len(input.Parts), input.Parts)
+	}
+	images, texts := 0, 0
+	for _, p := range input.Parts {
+		switch p.Kind {
+		case providertypes.ContentPartImage:
+			images++
+		case providertypes.ContentPartText:
+			texts++
+		}
+	}
+	if images != 1 {
+		t.Errorf("images = %d, want 1 (image kept)", images)
+	}
+	if texts != 2 {
+		t.Errorf("texts = %d, want 2 (user text + inlined json)", texts)
+	}
+}
+
+func TestServicePrepareUserInputRespectsTextAssetDisabledConfig(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	runtimeCfg := config.StaticDefaults().Runtime
+	disabled := false
+	runtimeCfg.Assets.TextAssetEnabled = &disabled
+	svc, _ := newPrepareTestServiceWithRuntimeConfig(t, workdir, true, runtimeCfg)
+
+	textPath := filepath.Join(workdir, "notes.md")
+	if err := os.WriteFile(textPath, []byte("# Title"), 0o644); err != nil {
+		t.Fatalf("write text: %v", err)
+	}
+
+	input, err := svc.PrepareUserInput(context.Background(), PrepareInput{
+		RunID:  "run-prepare-text-disabled",
+		Text:   "user query",
+		Images: []UserImageInput{{Path: textPath, MimeType: "text/markdown"}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareUserInput() error = %v", err)
+	}
+	// 关闭开关时文本 asset 被丢弃，只剩用户文本 part，不保留为会失败的 image part。
+	if len(input.Parts) != 1 {
+		t.Fatalf("expected 1 part (text only), got %d: %+v", len(input.Parts), input.Parts)
+	}
+	if input.Parts[0].Kind != providertypes.ContentPartText {
+		t.Errorf("Parts[0].Kind = %q, want text (text asset dropped)", input.Parts[0].Kind)
+	}
+
+	// 先读到 EventError（文本 asset 被丢弃的通知），再读到 InputNormalized。
+	dropEvent := mustReadRuntimeEvent(t, svc.Events())
+	if dropEvent.Type != EventError {
+		t.Fatalf("expected EventError for dropped text asset, got %v", dropEvent.Type)
+	}
+	dropMsg, ok := dropEvent.Payload.(string)
+	if !ok {
+		t.Fatalf("unexpected drop event payload type: %T", dropEvent.Payload)
+	}
+	if !strings.Contains(dropMsg, "text asset dropped") || !strings.Contains(dropMsg, "text_asset_enabled=false") {
+		t.Errorf("drop event message = %q, want contains 'text asset dropped' and 'text_asset_enabled=false'", dropMsg)
+	}
+
+	event := mustReadRuntimeEvent(t, svc.Events())
+	payload, ok := event.Payload.(InputNormalizedPayload)
+	if !ok {
+		t.Fatalf("unexpected payload type: %T", event.Payload)
+	}
+	if payload.TextAssetCount != 0 {
+		t.Errorf("TextAssetCount = %d, want 0 (text inline disabled)", payload.TextAssetCount)
+	}
+}
+
+func TestSessionInputPreparerSetTextAssetPolicyNil(t *testing.T) {
+	t.Parallel()
+
+	var preparer sessionInputPreparer
+	preparer.SetTextAssetPolicy(agentsession.DefaultTextAssetPolicy())
 }

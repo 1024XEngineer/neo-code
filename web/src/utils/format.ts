@@ -19,6 +19,14 @@ export function formatTokenCount(n: number): string {
   return String(n)
 }
 
+/** 格式化字节数为人类可读字符串，用于附件大小展示 */
+export function formatBytes(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 /** 截断文本 */
 export function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text

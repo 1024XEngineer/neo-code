@@ -70,6 +70,8 @@ func (e *AssetSaveError) Unwrap() error {
 type InputPreparer struct {
 	store      Store
 	assetStore AssetStore
+	// textPolicy 控制文本类附件的解析与落盘策略；nil 时使用 DefaultTextAssetPolicy。
+	textPolicy *TextAssetPolicy
 }
 
 type assetCleanupStore interface {
@@ -90,6 +92,23 @@ func NewInputPreparer(store Store, assetStore AssetStore) *InputPreparer {
 		store:      store,
 		assetStore: assetStore,
 	}
+}
+
+// SetTextAssetPolicy 注入文本类附件策略；nil 或未调用时使用 session.DefaultTextAssetPolicy。
+func (p *InputPreparer) SetTextAssetPolicy(policy TextAssetPolicy) {
+	if p == nil {
+		return
+	}
+	normalized := NormalizeTextAssetPolicy(policy)
+	p.textPolicy = &normalized
+}
+
+// textAssetPolicySnapshot 返回当前生效的文本附件策略。
+func (p *InputPreparer) textAssetPolicySnapshot() TextAssetPolicy {
+	if p == nil || p.textPolicy == nil {
+		return DefaultTextAssetPolicy()
+	}
+	return NormalizeTextAssetPolicy(*p.textPolicy)
 }
 
 // Prepare 负责会话解析/创建、附件落盘与 parts 组装。
@@ -130,6 +149,8 @@ func (p *InputPreparer) Prepare(ctx context.Context, input PrepareInput) (Prepar
 	for index, image := range input.Images {
 		path := strings.TrimSpace(image.Path)
 		assetID := strings.TrimSpace(image.AssetID)
+		mimeType := strings.TrimSpace(image.MimeType)
+		isText := p.textAssetPolicySnapshot().Whitelist.LookupByMime(mimeType)
 		if assetID != "" {
 			if path != "" {
 				p.rollbackCreatedSession(ctx, session.ID, sessionCreated)
@@ -138,10 +159,16 @@ func (p *InputPreparer) Prepare(ctx context.Context, input PrepareInput) (Prepar
 					SessionID: session.ID,
 					Index:     index,
 					Path:      path,
-					Err:       fmt.Errorf("image input cannot contain both path and asset id"),
+					Err:       fmt.Errorf("input cannot contain both path and asset id"),
 				}
 			}
-			meta, err := p.referenceImageAsset(ctx, session.ID, assetID, image.MimeType)
+			var meta AssetMeta
+			var err error
+			if isText {
+				meta, err = p.referenceTextAsset(ctx, session.ID, assetID, mimeType)
+			} else {
+				meta, err = p.referenceImageAsset(ctx, session.ID, assetID, mimeType)
+			}
 			if err != nil {
 				p.rollbackCreatedSession(ctx, session.ID, sessionCreated)
 				p.cleanupSavedAssets(ctx, session.ID, savedAssets)
@@ -165,9 +192,14 @@ func (p *InputPreparer) Prepare(ctx context.Context, input PrepareInput) (Prepar
 				Err:       fmt.Errorf("image path is empty"),
 			}
 		}
-		mimeType := strings.TrimSpace(image.MimeType)
 
-		meta, err := p.saveImageAsset(ctx, session.ID, session.Workdir, path, mimeType)
+		var meta AssetMeta
+		var err error
+		if isText {
+			meta, err = p.saveTextAsset(ctx, session.ID, session.Workdir, path, mimeType)
+		} else {
+			meta, err = p.saveImageAsset(ctx, session.ID, session.Workdir, path, mimeType)
+		}
 		if err != nil {
 			p.rollbackCreatedSession(ctx, session.ID, sessionCreated)
 			p.cleanupSavedAssets(ctx, session.ID, savedAssets)
@@ -243,6 +275,89 @@ func (p *InputPreparer) saveImageAsset(
 	meta, err := p.assetStore.SaveAsset(ctx, sessionID, file, resolvedMimeType)
 	if err != nil {
 		return AssetMeta{}, err
+	}
+	return meta, nil
+}
+
+// saveTextAsset 按会话工作目录解析文本附件路径后落盘到 session asset 存储。
+// 与 saveImageAsset 的差异：不做图像头嗅探，依赖调用方传入的 mime 是否在文本白名单内做兜底。
+func (p *InputPreparer) saveTextAsset(
+	ctx context.Context,
+	sessionID string,
+	workdir string,
+	path string,
+	mimeType string,
+) (AssetMeta, error) {
+	if err := ctx.Err(); err != nil {
+		return AssetMeta{}, err
+	}
+	absolutePath, err := resolveImagePath(workdir, path)
+	if err != nil {
+		return AssetMeta{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return AssetMeta{}, err
+	}
+
+	file, err := os.Open(absolutePath)
+	if err != nil {
+		return AssetMeta{}, fmt.Errorf("open text file: %w", err)
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+	if err := ctx.Err(); err != nil {
+		return AssetMeta{}, err
+	}
+
+	// 文本类附件使用声明的 mime 落盘，不做嗅探（避免误判非图片的二进制为 image/*）。
+	// 声明 mime 为空时按扩展名兜底，但仍要求命中文本白名单。
+	resolvedMime := normalizeMimeType(mimeType)
+	if resolvedMime == "" {
+		resolvedMime = normalizeMimeType(mime.TypeByExtension(strings.ToLower(filepath.Ext(path))))
+	}
+	policy := p.textAssetPolicySnapshot()
+	if !policy.Whitelist.LookupByMime(resolvedMime) {
+		return AssetMeta{}, fmt.Errorf("declared mime type %q is not in text asset whitelist", mimeType)
+	}
+
+	meta, err := p.assetStore.SaveAsset(ctx, sessionID, file, resolvedMime)
+	if err != nil {
+		return AssetMeta{}, err
+	}
+	return meta, nil
+}
+
+// referenceTextAsset 校验已保存附件属于当前会话，并返回可进入 runtime 的文本元数据。
+// 校验 mime 是否在文本白名单内，绕过 referenceImageAsset 的 image/* 限制。
+func (p *InputPreparer) referenceTextAsset(
+	ctx context.Context,
+	sessionID string,
+	assetID string,
+	mimeType string,
+) (AssetMeta, error) {
+	if err := ctx.Err(); err != nil {
+		return AssetMeta{}, err
+	}
+	if p.assetStore == nil {
+		return AssetMeta{}, fmt.Errorf("session: asset store is not configured")
+	}
+	normalizedAssetID := strings.TrimSpace(assetID)
+	if normalizedAssetID == "" {
+		return AssetMeta{}, fmt.Errorf("text asset id is empty")
+	}
+
+	meta, err := p.assetStore.Stat(ctx, sessionID, normalizedAssetID)
+	if err != nil {
+		return AssetMeta{}, fmt.Errorf("stat text asset: %w", err)
+	}
+	policy := p.textAssetPolicySnapshot()
+	if !policy.Whitelist.LookupByMime(meta.MimeType) {
+		return AssetMeta{}, fmt.Errorf("asset %q has mime %q, not in text asset whitelist", normalizedAssetID, meta.MimeType)
+	}
+	declaredMime := normalizeMimeType(mimeType)
+	if declaredMime != "" && declaredMime != meta.MimeType {
+		return AssetMeta{}, fmt.Errorf("declared mime type %q mismatches saved asset %q", declaredMime, meta.MimeType)
 	}
 	return meta, nil
 }

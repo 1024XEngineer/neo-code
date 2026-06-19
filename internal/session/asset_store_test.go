@@ -94,7 +94,8 @@ func TestSQLiteStoreSaveAssetRejectsInvalidInput(t *testing.T) {
 	if _, err := store.SaveAsset(ctx, "session_assets_invalid", strings.NewReader("x"), ""); err == nil {
 		t.Fatalf("expected empty mime type error")
 	}
-	if _, err := store.SaveAsset(ctx, "session_assets_invalid", strings.NewReader("x"), "text/plain"); err == nil {
+	// text/html 仍不属于会话文本 asset 白名单（避免任意 HTML/可执行脚本被内联为模型上下文）。
+	if _, err := store.SaveAsset(ctx, "session_assets_invalid", strings.NewReader("x"), "text/html"); err == nil {
 		t.Fatalf("expected unsupported mime type error")
 	}
 	if _, err := store.SaveAsset(ctx, "missing", strings.NewReader("x"), "image/png"); err == nil {
@@ -309,6 +310,116 @@ func MaxSessionAssetBytesForTest() int64 {
 	return MaxSessionAssetBytes
 }
 
+func TestSQLiteStoreSaveAssetAcceptsWhitelistedTextMime(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	session, err := store.CreateSession(ctx, CreateSessionInput{ID: "session_assets_text_ok", Title: "assets"})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	cases := []struct {
+		mime     string
+		payload  string
+		wantMime string
+	}{
+		{mime: "text/plain", payload: "hello", wantMime: "text/plain"},
+		{mime: "text/markdown", payload: "# title", wantMime: "text/markdown"},
+		{mime: "application/json", payload: "{\"k\":1}", wantMime: "application/json"},
+		{mime: "text/yaml", payload: "k: v", wantMime: "text/yaml"},
+		{mime: "application/x-yaml", payload: "k: v", wantMime: "application/x-yaml"},
+		{mime: "text/csv", payload: "a,b\n1,2", wantMime: "text/csv"},
+	}
+	for _, tc := range cases {
+		meta, err := store.SaveAsset(ctx, session.ID, strings.NewReader(tc.payload), tc.mime)
+		if err != nil {
+			t.Fatalf("SaveAsset(mime=%q) error = %v", tc.mime, err)
+		}
+		if meta.MimeType != tc.wantMime {
+			t.Errorf("SaveAsset(mime=%q) returned mime=%q", tc.mime, meta.MimeType)
+		}
+		if meta.Size != int64(len(tc.payload)) {
+			t.Errorf("SaveAsset(mime=%q) size=%d, want %d", tc.mime, meta.Size, len(tc.payload))
+		}
+		// Open 必须能取回相同字节流。
+		rc, openMeta, err := store.Open(ctx, session.ID, meta.ID)
+		if err != nil {
+			t.Fatalf("Open(asset=%s) error = %v", meta.ID, err)
+		}
+		data, readErr := io.ReadAll(rc)
+		_ = rc.Close()
+		if readErr != nil {
+			t.Fatalf("ReadAll(asset=%s) error = %v", meta.ID, readErr)
+		}
+		if string(data) != tc.payload {
+			t.Errorf("Open(asset=%s) payload mismatch", meta.ID)
+		}
+		if openMeta.MimeType != tc.wantMime {
+			t.Errorf("Open(asset=%s) mime=%q, want %q", meta.ID, openMeta.MimeType, tc.wantMime)
+		}
+	}
+}
+
+func TestSQLiteStoreSaveAssetRejectsNonWhitelistedTextMime(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	session, err := store.CreateSession(ctx, CreateSessionInput{ID: "session_assets_text_reject", Title: "assets"})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	cases := []string{
+		"text/html",
+		"application/javascript",
+		"application/octet-stream",
+		"application/xml",
+		"text/css",
+		"application/pdf",
+	}
+	for _, mime := range cases {
+		if _, err := store.SaveAsset(ctx, session.ID, strings.NewReader("x"), mime); err == nil {
+			t.Errorf("SaveAsset(mime=%q) should be rejected", mime)
+		} else if !strings.Contains(err.Error(), "unsupported asset mime type") {
+			t.Errorf("SaveAsset(mime=%q) unexpected error = %v", mime, err)
+		}
+	}
+}
+
+func TestSQLiteStoreSaveAssetAppliesTextPolicySizeLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	store.SetTextAssetPolicy(TextAssetPolicy{
+		Whitelist:         DefaultTextAssetWhitelist(),
+		MaxTextAssetBytes: 4,
+		MaxTextAssetChars: 16,
+	})
+	session, err := store.CreateSession(ctx, CreateSessionInput{ID: "session_assets_text_limit", Title: "assets"})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	// 1 字节 OK。
+	if _, err := store.SaveAsset(ctx, session.ID, strings.NewReader("abcd"), "text/plain"); err != nil {
+		t.Fatalf("SaveAsset(within text limit) error = %v", err)
+	}
+	// 超 4 字节应被拒（错误信息中应出现 4 bytes 截断值）。
+	oversized := bytes.NewReader([]byte("abcde"))
+	if _, err := store.SaveAsset(ctx, session.ID, oversized, "text/markdown"); err == nil ||
+		!strings.Contains(err.Error(), "asset size exceeds 4 bytes") {
+		t.Fatalf("SaveAsset(exceed text limit) error = %v, want size limit error", err)
+	}
+	// 图片路径仍走 image 上限（默认 20 MiB），4 字节图片 OK。
+	if _, err := store.SaveAsset(ctx, session.ID, strings.NewReader("abcd"), "image/png"); err != nil {
+		t.Fatalf("SaveAsset(image within image limit) error = %v", err)
+	}
+}
+
 func TestSQLiteStoreOpenMissingAssetReturnsNotExist(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
@@ -342,5 +453,26 @@ VALUES ('asset_escape', ?, 'image/png', 4, '../escape.bin', 0)
 
 	if _, err := store.Stat(ctx, session.ID, "asset_escape"); err == nil || !strings.Contains(err.Error(), "escapes base dir") {
 		t.Fatalf("expected escaped relative path error, got %v", err)
+	}
+}
+
+func TestSQLiteStoreTextAssetPolicySnapshot(t *testing.T) {
+	t.Parallel()
+
+	var nilStore *SQLiteStore
+	nilStore.SetTextAssetPolicy(TextAssetPolicy{})
+	if got := nilStore.textAssetPolicySnapshot(); got.MaxTextAssetBytes != DefaultMaxTextAssetBytes {
+		t.Fatalf("nil store policy = %+v, want defaults", got)
+	}
+
+	store := newTestStore(t)
+	store.SetTextAssetPolicy(TextAssetPolicy{
+		Whitelist:         DefaultTextAssetWhitelist(),
+		MaxTextAssetBytes: 111,
+		MaxTextAssetChars: 222,
+	})
+	got := store.textAssetPolicySnapshot()
+	if got.MaxTextAssetBytes != 111 || got.MaxTextAssetChars != 222 {
+		t.Fatalf("textAssetPolicySnapshot() = %+v", got)
 	}
 }

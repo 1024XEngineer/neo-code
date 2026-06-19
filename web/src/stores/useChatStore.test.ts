@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { useChatStore } from './useChatStore'
+import { useChatStore, createUserMessage } from './useChatStore'
 
 beforeEach(() => {
   if (typeof URL.revokeObjectURL !== 'function') {
@@ -275,5 +275,21 @@ describe('useChatStore', () => {
     store.clearMessages()
     expect(useChatStore.getState().permissionMode).toBe('default')
     expect(useChatStore.getState().isCompacting).toBe(false)
+  })
+
+  it('createUserMessage preserves attachment kind for text and image files', () => {
+    const msg = createUserMessage('hi', [
+      { id: 'a1', mimeType: 'image/png', kind: 'image', name: 'a.png' },
+      { id: 'a2', mimeType: 'text/markdown', kind: 'text', name: 'b.md' },
+    ])
+    expect(msg.attachments).toEqual([
+      { id: 'a1', mimeType: 'image/png', kind: 'image', name: 'a.png' },
+      { id: 'a2', mimeType: 'text/markdown', kind: 'text', name: 'b.md' },
+    ])
+  })
+
+  it('createUserMessage omits attachments when none provided', () => {
+    const msg = createUserMessage('hi')
+    expect(msg.attachments).toBeUndefined()
   })
 })
