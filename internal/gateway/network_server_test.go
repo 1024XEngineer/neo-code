@@ -1885,6 +1885,18 @@ func TestDetectAllowedUploadTextMime(t *testing.T) {
 			want:     "text/plain",
 		},
 		{
+			name:     "content sniffing limits probe to 512 bytes",
+			payload:  bytes.Repeat([]byte("a"), 1024),
+			fileName: "notes",
+			want:     "text/plain",
+		},
+		{
+			name:     "binary content without extension is rejected",
+			payload:  []byte{0x00, 0x01, 0x02, 0x03, 0xff},
+			fileName: "blob",
+			want:     "",
+		},
+		{
 			name:     "non utf8 payload rejected even with whitelisted extension",
 			payload:  []byte{0xC3, 0x28, 0xA0, 0xA1},
 			fileName: "broken.txt",

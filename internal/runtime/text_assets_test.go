@@ -374,3 +374,78 @@ func TestTextAssetFileNameMap(t *testing.T) {
 		})
 	}
 }
+
+func TestInlineTextSessionAssetsGuards(t *testing.T) {
+	t.Parallel()
+
+	parts := []providertypes.ContentPart{providertypes.NewTextPart("keep")}
+	if out, result := inlineTextSessionAssets(
+		context.Background(), nil, "s1", parts, agentsession.DefaultTextAssetPolicy(), nil, nil,
+	); len(out) != 1 || len(result.Parts) != 0 {
+		t.Fatalf("nil store result = out:%+v result:%+v", out, result)
+	}
+	if out, result := inlineTextSessionAssets(
+		context.Background(), newTextAssetStubStore(), "s1", nil, agentsession.DefaultTextAssetPolicy(), nil, nil,
+	); out != nil || result.Inlined != 0 {
+		t.Fatalf("empty parts result = out:%+v result:%+v", out, result)
+	}
+
+	malformed := []providertypes.ContentPart{
+		{Kind: providertypes.ContentPartImage},
+		{Kind: providertypes.ContentPartImage, Image: &providertypes.ImagePart{SourceType: providertypes.ImageSourceSessionAsset}},
+		providertypes.NewSessionAssetImagePart(" ", "text/plain"),
+		providertypes.NewSessionAssetImagePart("image-1", "image/png"),
+	}
+	out, result := inlineTextSessionAssets(
+		context.Background(), newTextAssetStubStore(), "s1", malformed, agentsession.DefaultTextAssetPolicy(), nil, nil,
+	)
+	if len(out) != len(malformed) || result.Inlined != 0 || result.Failed != 0 {
+		t.Fatalf("malformed parts result = out:%+v result:%+v", out, result)
+	}
+}
+
+func TestInlineUserInputTextAssetsNilService(t *testing.T) {
+	t.Parallel()
+
+	parts := []providertypes.ContentPart{providertypes.NewTextPart("keep")}
+	var service *Service
+	result := service.inlineUserInputTextAssets(
+		context.Background(), "s1", PrepareInput{}, parts, agentsession.DefaultTextAssetPolicy(),
+	)
+	if len(result.Parts) != 1 || result.Parts[0].Text != "keep" {
+		t.Fatalf("nil service result = %+v", result)
+	}
+}
+
+func TestDropTextAssetImageParts(t *testing.T) {
+	t.Parallel()
+
+	if got := dropTextAssetImageParts(nil, agentsession.DefaultTextAssetPolicy(), nil); got != nil {
+		t.Fatalf("empty parts = %+v, want nil", got)
+	}
+	parts := []providertypes.ContentPart{
+		providertypes.NewTextPart("keep"),
+		providertypes.NewRemoteImagePart("https://example.com/image.png"),
+		providertypes.NewSessionAssetImagePart("image-1", "image/png"),
+		{Kind: providertypes.ContentPartImage},
+		{Kind: providertypes.ContentPartImage, Image: &providertypes.ImagePart{SourceType: providertypes.ImageSourceSessionAsset}},
+		providertypes.NewSessionAssetImagePart(" ", "text/plain"),
+		providertypes.NewSessionAssetImagePart("text-1", "text/plain"),
+	}
+	var droppedID, droppedMIME string
+	got := dropTextAssetImageParts(parts, agentsession.DefaultTextAssetPolicy(), func(assetID, mime string) {
+		droppedID = assetID
+		droppedMIME = mime
+	})
+	if len(got) != len(parts)-1 {
+		t.Fatalf("drop result length = %d, want %d: %+v", len(got), len(parts)-1, got)
+	}
+	if droppedID != "text-1" || droppedMIME != "text/plain" {
+		t.Fatalf("drop callback = (%q, %q)", droppedID, droppedMIME)
+	}
+	for _, part := range got {
+		if part.Image != nil && part.Image.Asset != nil && part.Image.Asset.ID == "text-1" {
+			t.Fatal("text asset was not dropped")
+		}
+	}
+}

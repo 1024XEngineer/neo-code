@@ -111,6 +111,40 @@ func TestTextAssetWhitelistWithExtensions(t *testing.T) {
 	}
 }
 
+func TestTextAssetWhitelistEmptyAndInvalidEntries(t *testing.T) {
+	t.Parallel()
+
+	whitelist := NewTextAssetWhitelist(map[string]string{
+		"":     "text/plain",
+		".txt": "",
+		".MD":  " TEXT/MARKDOWN ",
+	})
+	if whitelist.LookupByExtension("README.MD") != "text/markdown" {
+		t.Fatalf("unexpected normalized markdown lookup: %q", whitelist.LookupByExtension("README.MD"))
+	}
+	if whitelist.LookupByExtension("README") != "" {
+		t.Fatal("extensionless filename must not match")
+	}
+	if whitelist.LookupByMime(" ") {
+		t.Fatal("empty MIME must not match")
+	}
+
+	empty := NewTextAssetWhitelist(nil)
+	if got := empty.Extensions(); got != nil {
+		t.Fatalf("empty Extensions() = %v, want nil", got)
+	}
+	if got := empty.String(); got != "empty" {
+		t.Fatalf("empty String() = %q, want empty", got)
+	}
+	extended := empty.WithExtensions(map[string]string{"": "text/plain", "txt": ""})
+	if !extended.IsEmpty() {
+		t.Fatalf("invalid extensions must be ignored: %s", extended.String())
+	}
+	if got := whitelist.String(); !strings.Contains(got, "md→text/markdown") {
+		t.Fatalf("String() = %q, want markdown mapping", got)
+	}
+}
+
 func TestNormalizeTextAssetPolicy(t *testing.T) {
 	t.Parallel()
 

@@ -380,3 +380,10 @@ func TestServicePrepareUserInputRespectsTextAssetDisabledConfig(t *testing.T) {
 		t.Errorf("TextAssetCount = %d, want 0 (text inline disabled)", payload.TextAssetCount)
 	}
 }
+
+func TestSessionInputPreparerSetTextAssetPolicyNil(t *testing.T) {
+	t.Parallel()
+
+	var preparer sessionInputPreparer
+	preparer.SetTextAssetPolicy(agentsession.DefaultTextAssetPolicy())
+}

@@ -455,3 +455,24 @@ VALUES ('asset_escape', ?, 'image/png', 4, '../escape.bin', 0)
 		t.Fatalf("expected escaped relative path error, got %v", err)
 	}
 }
+
+func TestSQLiteStoreTextAssetPolicySnapshot(t *testing.T) {
+	t.Parallel()
+
+	var nilStore *SQLiteStore
+	nilStore.SetTextAssetPolicy(TextAssetPolicy{})
+	if got := nilStore.textAssetPolicySnapshot(); got.MaxTextAssetBytes != DefaultMaxTextAssetBytes {
+		t.Fatalf("nil store policy = %+v, want defaults", got)
+	}
+
+	store := newTestStore(t)
+	store.SetTextAssetPolicy(TextAssetPolicy{
+		Whitelist:         DefaultTextAssetWhitelist(),
+		MaxTextAssetBytes: 111,
+		MaxTextAssetChars: 222,
+	})
+	got := store.textAssetPolicySnapshot()
+	if got.MaxTextAssetBytes != 111 || got.MaxTextAssetChars != 222 {
+		t.Fatalf("textAssetPolicySnapshot() = %+v", got)
+	}
+}

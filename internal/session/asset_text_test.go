@@ -16,6 +16,41 @@ type stubAssetStore struct {
 	mimes    map[string]map[string]string
 }
 
+type assetOpenFuncStore struct {
+	open func(context.Context, string, string) (io.ReadCloser, AssetMeta, error)
+}
+
+func (s assetOpenFuncStore) SaveAsset(context.Context, string, io.Reader, string) (AssetMeta, error) {
+	return AssetMeta{}, errors.New("not implemented")
+}
+
+func (s assetOpenFuncStore) Open(ctx context.Context, sessionID, assetID string) (io.ReadCloser, AssetMeta, error) {
+	return s.open(ctx, sessionID, assetID)
+}
+
+func (s assetOpenFuncStore) Stat(context.Context, string, string) (AssetMeta, error) {
+	return AssetMeta{}, errors.New("not implemented")
+}
+
+type readError struct{ err error }
+
+func (r readError) Read([]byte) (int, error) { return 0, r.err }
+
+type cancelAfterRead struct {
+	cancel context.CancelFunc
+	done   bool
+}
+
+func (r *cancelAfterRead) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	n := copy(p, "content")
+	r.cancel()
+	return n, nil
+}
+
 func newStubAssetStore() *stubAssetStore {
 	return &stubAssetStore{
 		payloads: map[string]map[string][]byte{},
@@ -103,6 +138,86 @@ func TestLoadTextAsset_Success(t *testing.T) {
 	}
 	if result.KeptChars != 11 {
 		t.Errorf("KeptChars = %d, want 11", result.KeptChars)
+	}
+}
+
+func TestAssetTextLoadErrorMethods(t *testing.T) {
+	t.Parallel()
+
+	if got := (*AssetTextLoadError)(nil).Error(); got != "" {
+		t.Fatalf("nil Error() = %q, want empty", got)
+	}
+	if got := (*AssetTextLoadError)(nil).Unwrap(); got != nil {
+		t.Fatalf("nil Unwrap() = %v, want nil", got)
+	}
+
+	inner := errors.New("boom")
+	tests := []struct {
+		name string
+		err  *AssetTextLoadError
+		want string
+	}{
+		{name: "base", err: &AssetTextLoadError{}, want: "session: load text asset"},
+		{name: "asset", err: &AssetTextLoadError{AssetID: "asset-1"}, want: `session: load text asset "asset-1"`},
+		{name: "reason", err: &AssetTextLoadError{Reason: "io"}, want: "session: load text asset: io"},
+		{
+			name: "all fields",
+			err:  &AssetTextLoadError{AssetID: "asset-1", Reason: "io", Err: inner},
+			want: `session: load text asset "asset-1": io: boom`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.err.Error(); got != tt.want {
+				t.Fatalf("Error() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	if got := (&AssetTextLoadError{Err: inner}).Unwrap(); !errors.Is(got, inner) {
+		t.Fatalf("Unwrap() = %v, want %v", got, inner)
+	}
+}
+
+func TestLoadTextAssetContextAndReadErrors(t *testing.T) {
+	t.Parallel()
+
+	store := newStubAssetStore()
+	meta, err := store.SaveAsset(context.Background(), "s1", strings.NewReader("content"), "text/plain")
+	if err != nil {
+		t.Fatalf("SaveAsset() error = %v", err)
+	}
+	if _, err := LoadTextAsset(nil, store, "s1", meta.ID, DefaultTextAssetPolicy(), TextAssetLoadOptions{}); err != nil {
+		t.Fatalf("LoadTextAsset(nil context) error = %v", err)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = LoadTextAsset(canceled, store, "s1", meta.ID, DefaultTextAssetPolicy(), TextAssetLoadOptions{})
+	assertAssetTextLoadReason(t, err, "ctx-canceled")
+
+	readErr := errors.New("read failed")
+	failingStore := assetOpenFuncStore{open: func(context.Context, string, string) (io.ReadCloser, AssetMeta, error) {
+		return io.NopCloser(readError{err: readErr}), AssetMeta{MimeType: "text/plain"}, nil
+	}}
+	_, err = LoadTextAsset(context.Background(), failingStore, "s1", "asset-1", DefaultTextAssetPolicy(), TextAssetLoadOptions{})
+	assertAssetTextLoadReason(t, err, "io")
+	if !errors.Is(err, readErr) {
+		t.Fatalf("LoadTextAsset() error = %v, want wrapping %v", err, readErr)
+	}
+
+	readCtx, cancelRead := context.WithCancel(context.Background())
+	cancelingStore := assetOpenFuncStore{open: func(context.Context, string, string) (io.ReadCloser, AssetMeta, error) {
+		return io.NopCloser(&cancelAfterRead{cancel: cancelRead}), AssetMeta{MimeType: "text/plain"}, nil
+	}}
+	_, err = LoadTextAsset(readCtx, cancelingStore, "s1", "asset-1", DefaultTextAssetPolicy(), TextAssetLoadOptions{})
+	assertAssetTextLoadReason(t, err, "ctx-canceled")
+}
+
+func assertAssetTextLoadReason(t *testing.T, err error, want string) {
+	t.Helper()
+	var loadErr *AssetTextLoadError
+	if !errors.As(err, &loadErr) || loadErr.Reason != want {
+		t.Fatalf("LoadTextAsset() error = %v, want reason %q", err, want)
 	}
 }
 
