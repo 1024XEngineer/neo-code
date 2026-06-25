@@ -45,7 +45,7 @@ func TestPaletteHandleKeyAllBranches(t *testing.T) {
 	// esc/ctrl+c 关闭
 	for _, m := range []tea.Msg{keyType(tea.KeyEsc), keyType(tea.KeyCtrlC)} {
 		vs := pickerState()
-		vs.Overlay.Active = "palette"
+		vs.Overlay.Active = state.OverlayPalette
 		p := NewPalette(vs)
 		_, _ = p.Update(tea.KeyMsg(m.(tea.KeyMsg)))
 		if vs.Overlay.Active != "" {
@@ -160,7 +160,7 @@ func TestModelPickerLifecycleAndKey(t *testing.T) {
 	}
 	// esc/ctrl+c 关闭
 	for _, kk := range []tea.KeyMsg{keyType(tea.KeyEsc), keyType(tea.KeyCtrlC)} {
-		vs.Overlay.Active = "model_picker"
+		vs.Overlay.Active = state.OverlayModelPicker
 		_, _ = m.Update(kk)
 	}
 	// enter / space -> ModelSelectMsg
@@ -232,7 +232,7 @@ func TestSessionPickerLifecycleAndKey(t *testing.T) {
 	}
 	// esc/ctrl+c 关闭
 	for _, kk := range []tea.KeyMsg{keyType(tea.KeyEsc), keyType(tea.KeyCtrlC)} {
-		vs.Overlay.Active = "session_picker"
+		vs.Overlay.Active = state.OverlaySessionPicker
 		_, _ = s.Update(kk)
 	}
 	// enter / space -> SessionSelectMsg

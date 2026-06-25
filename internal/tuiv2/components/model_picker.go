@@ -49,7 +49,7 @@ func (m *ModelPicker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *ModelPicker) handleKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc", "ctrl+c":
-		m.state.Overlay.Active = ""
+		m.state.Overlay.Active = state.OverlayNone
 		m.state.Overlay.Query = ""
 		m.state.Overlay.Selected = 0
 		return nil
@@ -63,7 +63,7 @@ func (m *ModelPicker) handleKey(msg tea.KeyMsg) tea.Cmd {
 			idx = len(matched) - 1
 		}
 		selected := matched[idx]
-		m.state.Overlay.Active = ""
+		m.state.Overlay.Active = state.OverlayNone
 		m.state.Overlay.Query = ""
 		m.state.Overlay.Selected = 0
 		return func() tea.Msg {
@@ -118,7 +118,7 @@ func (m *ModelPicker) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		matched := m.matchedModels()
 		if itemIdx >= 0 && itemIdx < len(matched) {
 			selected := matched[itemIdx]
-			m.state.Overlay.Active = ""
+			m.state.Overlay.Active = state.OverlayNone
 			m.state.Overlay.Query = ""
 			m.state.Overlay.Selected = 0
 			return func() tea.Msg {

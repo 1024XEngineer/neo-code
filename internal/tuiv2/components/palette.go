@@ -67,7 +67,7 @@ func (p *Palette) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (p *Palette) handleKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc", "ctrl+c":
-		p.state.Overlay.Active = ""
+		p.state.Overlay.Active = state.OverlayNone
 		p.state.Overlay.Query = ""
 		p.state.Overlay.Selected = 0
 		return nil
@@ -81,7 +81,7 @@ func (p *Palette) handleKey(msg tea.KeyMsg) tea.Cmd {
 			idx = len(matched) - 1
 		}
 		selected := matched[idx]
-		p.state.Overlay.Active = ""
+		p.state.Overlay.Active = state.OverlayNone
 		p.state.Overlay.Query = ""
 		p.state.Overlay.Selected = 0
 		return func() tea.Msg {
@@ -160,7 +160,7 @@ func (p *Palette) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		matched := p.matchedItems()
 		if itemIdx >= 0 && itemIdx < len(matched) {
 			selected := matched[itemIdx]
-			p.state.Overlay.Active = ""
+			p.state.Overlay.Active = state.OverlayNone
 			p.state.Overlay.Query = ""
 			p.state.Overlay.Selected = 0
 			return func() tea.Msg {

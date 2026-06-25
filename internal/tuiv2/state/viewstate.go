@@ -17,13 +17,56 @@ type ViewState struct {
 	Mode    InputMode
 	Overlay OverlayState
 	Confirm ConfirmState
+	Search  SearchState
+	Ex      ExState
 }
+
+// OverlayType 描述当前激活的浮层类型，所有引用必须使用常量，禁止散落字符串字面量。
+type OverlayType string
+
+const (
+	// OverlayNone 表示无浮层激活。
+	OverlayNone OverlayType = ""
+	// OverlayPalette 命令面板。
+	OverlayPalette OverlayType = "palette"
+	// OverlayHelp 快捷键帮助。
+	OverlayHelp OverlayType = "help"
+	// OverlaySessionPicker 会话选择器。
+	OverlaySessionPicker OverlayType = "session_picker"
+	// OverlayModelPicker 模型选择器。
+	OverlayModelPicker OverlayType = "model_picker"
+	// OverlayConfirm 危险操作确认弹窗。
+	OverlayConfirm OverlayType = "confirm"
+	// OverlayEx Ex 命令行输入（: 前缀）。
+	OverlayEx OverlayType = "ex"
+	// OverlaySearch 搜索输入（/ 前缀）。
+	OverlaySearch OverlayType = "search"
+)
 
 // OverlayState 描述当前浮层显示状态。
 type OverlayState struct {
-	Active   string // "", "palette", "help", "session_picker", "model_picker", "confirm"
-	Query    string // 搜索文本
-	Selected int    // 当前选中索引
+	Active   OverlayType // 使用 OverlayXxx 常量，禁止字面量
+	Query    string      // 搜索文本
+	Selected int         // 当前选中索引
+}
+
+// SearchState 描述 Normal Mode 下的 stream 搜索状态。
+//
+// Matches 存放命中的 StreamEntry 全局索引；由于 state.Stream 是 append-only
+// （只在末尾追加），这些索引一旦计算即永久有效，不会因后续追加而错乱。
+// Stale 在 stream 增长后置位，提示用户当前 Matches 不含新增内容，需重新搜索。
+type SearchState struct {
+	Active     bool
+	Query      string
+	Matches    []int // state.Stream 的全局索引（append-only 保证稳定）
+	MatchIndex int
+	Stale      bool
+}
+
+// ExState 描述 Normal Mode 下 : 命令行的输入状态。
+type ExState struct {
+	Active bool
+	Input  string
 }
 
 // GatewayState 描述 Gateway 连接、会话和模型选择状态。

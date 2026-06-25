@@ -308,4 +308,15 @@ TUI v2 的 Gateway 通信层有两个选择：
 
 ---
 
+### 后续 Phase 进展（tui-v2-issues 规划）
+
+早期 Phase 1–4 之外，TUI v2 按 `~/meno/tui-v2-issues/` 下的分阶段规划持续推进：
+
+- **Phase 9（交互增强）**：Leader 键、模型选择器、确认弹窗、鼠标、命令路由（已交付，见 git 历史 `feat(tui-v2): Phase 9` 系列 commit）。
+- **Phase 10（全新快捷键系统）**：三层键位（Input/Normal/Leader）补全 Input Mode 行编辑（Ctrl+A/E/K/W）、Normal Mode 整页翻页（Ctrl+F/B）与 stream 搜索（`/` + `n/N` + stale 提示）、`:` 命令行（q/debug/help/compact/mode）、Leader 动作调整（m=模型选择器、c=取消运行、r=重试、Space=切上一会话）、模式指示配色、Ctrl+D 上下文分发、Overlay typed 常量。详细键位与验收标准见规划文档 `phase-10-keybinding-system.md`。
+
+> 注：Phase 10 不引入 `ModeChangedMsg`——模式切换通过同步修改 `ViewState.Mode` 完成（遵循 AGENTS.md「代码为准」原则，规划文档已同步）。
+
+---
+
 *本指南是 TUI v2 文档集的子文档。架构总览见 [架构导航](./tui-v2-architecture-hub.md)，视觉交互见 [UI/UX](./tui-v2-ui-ux-design.md)，数据契约见 [数据/契约](./tui-v2-data-and-gateway.md)。*

@@ -176,3 +176,80 @@ func TestCommandPromptMessageLinesHelpers(t *testing.T) {
 		t.Fatal("contentWidth fallback wrong")
 	}
 }
+
+// TestCommandPromptCtrlEditing 覆盖 Ctrl+A/E/K/W 行编辑能力。
+func TestCommandPromptCtrlEditing(t *testing.T) {
+	vs := promptState()
+	vs.Input.Mode = state.InputStateModeMessage
+	vs.Mode = state.InputModeInput
+	p := NewCommandPrompt(vs)
+
+	// 输入 "hello world"，光标在末尾(11)
+	p.insertText("hello world")
+
+	// Ctrl+A → 光标到行首
+	p.Update(keyMsg("ctrl+a"))
+	if vs.Input.Cursor != 0 {
+		t.Fatalf("ctrl+a cursor=%d, want 0", vs.Input.Cursor)
+	}
+
+	// Ctrl+E → 光标到行尾
+	p.Update(keyMsg("ctrl+e"))
+	if vs.Input.Cursor != runeLen("hello world") {
+		t.Fatalf("ctrl+e cursor=%d, want %d", vs.Input.Cursor, runeLen("hello world"))
+	}
+
+	// Ctrl+K 在行尾不删除；移到中间再删到行尾
+	p.Update(keyMsg("ctrl+a"))
+	p.moveCursor(6) // 光标到 "hello " 之后(6)，即 "world" 之前
+	p.Update(keyMsg("ctrl+k"))
+	if vs.Input.Text != "hello " {
+		t.Fatalf("ctrl+k text=%q, want \"hello \"", vs.Input.Text)
+	}
+
+	// 重新输入 "foo bar baz" 测 Ctrl+W 删词
+	vs.Input.Text = ""
+	vs.Input.Cursor = 0
+	p.insertText("foo bar baz")
+	p.Update(keyMsg("ctrl+w")) // 删 "baz"
+	if vs.Input.Text != "foo bar " {
+		t.Fatalf("ctrl+w text=%q, want \"foo bar \"", vs.Input.Text)
+	}
+	p.Update(keyMsg("ctrl+w")) // 删 "bar"（先跳过尾部空格）
+	if vs.Input.Text != "foo " {
+		t.Fatalf("ctrl+w text=%q, want \"foo \"", vs.Input.Text)
+	}
+
+	// isWordBoundary 边界字符
+	if !isWordBoundary(' ') || isWordBoundary('a') {
+		t.Fatal("isWordBoundary wrong")
+	}
+}
+
+// TestModeLineIndicatorColors 验证模式指示器按模式着色。
+func TestModeLineIndicatorColors(t *testing.T) {
+	// input → BaseStyle
+	vs := promptState()
+	vs.Mode = state.InputModeInput
+	p := NewCommandPrompt(vs)
+	if v := p.modeLine(); v == "" {
+		t.Fatal("input modeLine empty")
+	}
+	// normal → SubtleStyle
+	vs.Mode = state.NormalMode
+	if v := p.modeLine(); v == "" {
+		t.Fatal("normal modeLine empty")
+	}
+	// leader → AccentStyle 加粗
+	vs.Mode = state.LeaderMode
+	if v := p.modeLine(); v == "" {
+		t.Fatal("leader modeLine empty")
+	}
+	// modeIndicatorStyle 返回正确类型（非空 Style，通过是否可 Render 验证）
+	for _, m := range []state.InputMode{state.InputModeInput, state.NormalMode, state.LeaderMode} {
+		s := modeIndicatorStyle(m)
+		if s.Render("x") == "" {
+			t.Fatalf("modeIndicatorStyle(%v) render empty", m)
+		}
+	}
+}

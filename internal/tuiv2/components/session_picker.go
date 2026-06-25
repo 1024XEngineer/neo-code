@@ -55,7 +55,7 @@ func (s *SessionPicker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (s *SessionPicker) handleKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc", "ctrl+c":
-		s.state.Overlay.Active = ""
+		s.state.Overlay.Active = state.OverlayNone
 		s.state.Overlay.Query = ""
 		s.state.Overlay.Selected = 0
 		return nil
@@ -69,7 +69,7 @@ func (s *SessionPicker) handleKey(msg tea.KeyMsg) tea.Cmd {
 			idx = len(matched) - 1
 		}
 		selected := matched[idx]
-		s.state.Overlay.Active = ""
+		s.state.Overlay.Active = state.OverlayNone
 		s.state.Overlay.Query = ""
 		s.state.Overlay.Selected = 0
 		return func() tea.Msg {
@@ -85,7 +85,7 @@ func (s *SessionPicker) handleKey(msg tea.KeyMsg) tea.Cmd {
 			idx = len(matched) - 1
 		}
 		target := matched[idx]
-		s.state.Overlay.Active = ""
+		s.state.Overlay.Active = state.OverlayNone
 		return func() tea.Msg {
 			return SessionDeleteMsg{SessionID: target.ID}
 		}
@@ -158,7 +158,7 @@ func (s *SessionPicker) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		matched := s.matchedSessions()
 		if itemIdx >= 0 && itemIdx < len(matched) {
 			selected := matched[itemIdx]
-			s.state.Overlay.Active = ""
+			s.state.Overlay.Active = state.OverlayNone
 			s.state.Overlay.Query = ""
 			s.state.Overlay.Selected = 0
 			return func() tea.Msg {

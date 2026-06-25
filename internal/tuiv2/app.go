@@ -8,7 +8,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"neo-code/internal/tuiv2/components"
 	"neo-code/internal/tuiv2/gateway"
@@ -46,9 +45,14 @@ type App struct {
 	// Ctrl+C 双退保护
 	lastCtrlC time.Time
 
+	// Leader 重试与切换上一会话所需的私有运行时状态（不入 ViewState，非渲染状态）
+	lastUserText  string // 最近一次发送的用户消息文本，供 Space r 重试
+	prevSessionID string // 上一个会话 ID，供 Space Space 切换
+
 	ambientStatus  *components.AmbientStatus
 	agentStream    *components.AgentStream
 	commandPrompt  *components.CommandPrompt
+	cmdLine        *components.CmdLine
 	softInspector  *components.SoftInspector
 	palette        *components.Palette
 	helpOverlay    *components.HelpOverlay
@@ -71,6 +75,7 @@ func NewApp(cfg StartupConfig) tea.Model {
 		ambientStatus:  components.NewAmbientStatus(viewState),
 		agentStream:    components.NewAgentStream(viewState),
 		commandPrompt:  components.NewCommandPrompt(viewState),
+		cmdLine:        components.NewCmdLine(viewState),
 		softInspector:  components.NewSoftInspector(viewState),
 		palette:        components.NewPalette(viewState),
 		helpOverlay:    components.NewHelpOverlay(viewState),
@@ -113,6 +118,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(a.state.Stream) > beforeStreamLen {
 			a.state.Layout.AutoScroll = true
 			a.state.Layout.ScrollOffset = 0
+			// stream 增长后，已有搜索结果不再包含新内容，标记 stale 提示用户。
+			if len(a.state.Search.Matches) > 0 {
+				a.state.Search.Stale = true
+			}
+		}
+		// 新 run 开始或会话相关事件时清理 Normal 子状态（搜索/Ex），避免跨 run/会话残留。
+		switch msg.event.Type {
+		case gateway.EventRunStarted:
+			a.clearSearchAndEx()
 		}
 		a.bindComponents()
 		if a.state.Runtime.Phase == state.RuntimePhaseError && len(a.state.Stream) > 0 {
@@ -127,6 +141,25 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.handleQuestionAnswer(msg)
 	case components.PromptCancelMsg:
 		a.cancelPrompt(msg.Mode)
+		return a, nil
+	case components.ExCommandMsg:
+		// : 命令行提交：执行命令并关闭 Ex overlay（命令打开新 overlay 者除外）。
+		cmd := a.executeExCommand(msg.Command)
+		if a.state.Overlay.Active == state.OverlayEx {
+			a.closeOverlay()
+			a.state.Ex = state.ExState{}
+		}
+		return a, cmd
+	case components.SearchSubmitMsg:
+		// / 搜索提交：执行扫描并关闭搜索 overlay 回 Normal。
+		cmd := a.executeSearch(msg.Query)
+		a.closeOverlay()
+		a.state.Search.Active = false
+		return a, cmd
+	case components.CmdLineCancelMsg:
+		// Esc/Ctrl+C 取消 Ex/Search 输入：关闭 overlay 回 Normal。
+		a.closeOverlay()
+		a.clearSearchAndEx()
 		return a, nil
 	case components.SlashCommandMsg:
 		return a, a.handleSlashCommand(msg)
@@ -186,15 +219,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (a *App) View() string {
 	// 浮层模式下覆盖主视图
 	switch a.state.Overlay.Active {
-	case "palette":
+	case state.OverlayPalette:
 		return a.fitViewToTerminal(a.palette.View())
-	case "help":
+	case state.OverlayHelp:
 		return a.fitViewToTerminal(a.helpOverlay.View())
-	case "session_picker":
+	case state.OverlaySessionPicker:
 		return a.fitViewToTerminal(a.sessionPicker.View())
-	case "model_picker":
+	case state.OverlayModelPicker:
 		return a.fitViewToTerminal(a.modelPicker.View())
-	case "confirm":
+	case state.OverlayConfirm:
 		return a.fitViewToTerminal(a.confirmOverlay.View())
 	}
 	lines := []string{
@@ -204,31 +237,19 @@ func (a *App) View() string {
 	if a.lastErr != "" {
 		lines = append(lines, theme.ErrorStyle().Render("  "+theme.StatusSymbol(theme.PhaseError)+" "+a.lastErr))
 	}
-	lines = append(lines, a.mainArea(), a.separatorLine(), a.commandPrompt.View())
+	// Ex/Search 输入 overlay：渲染 cmdline 输入行（替代普通 prompt 输入区），
+	// 不覆盖主视图，仍保留 ambient/stream 可见。
+	promptView := a.commandPrompt.View()
+	if a.state.Overlay.Active == state.OverlayEx || a.state.Overlay.Active == state.OverlaySearch {
+		promptView = a.cmdLine.View() + "\n" + a.commandPrompt.ModeLine()
+	}
+	lines = append(lines, a.mainArea(), a.separatorLine(), promptView)
 	if a.debug {
 		lines = append(lines, "", theme.WarningStyle().Render(a.debugLine()))
 	}
 	return a.fitViewToTerminal(strings.Join(lines, "\n"))
 }
 
-// applyWindowSize 更新布局尺寸，并按 Focus-Only 断点计算 Soft Inspector 状态。
-func (a *App) applyWindowSize(width int, height int) {
-	a.state.Layout.Width = width
-	a.state.Layout.Height = height
-	switch {
-	case width < inspectorHiddenWidth:
-		a.state.Layout.ShowInspector = false
-		a.state.Layout.InspectorWidth = 0
-	case width < inspectorWideMin:
-		a.state.Layout.ShowInspector = true
-		a.state.Layout.InspectorWidth = width
-	default:
-		a.state.Layout.ShowInspector = true
-		a.state.Layout.InspectorWidth = inspectorWideWidth
-	}
-}
-
-// routeComponents 将全局消息转发给各静态布局组件。
 func (a *App) routeComponents(msg tea.Msg) tea.Cmd {
 	_, statusCmd := a.ambientStatus.Update(msg)
 	_, streamCmd := a.agentStream.Update(msg)
@@ -252,13 +273,13 @@ func (a *App) routeStreamKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 func (a *App) handleMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// 浮层激活时，鼠标交给浮层组件
 	switch a.state.Overlay.Active {
-	case "palette":
+	case state.OverlayPalette:
 		_, cmd := a.palette.Update(msg)
 		return a, cmd
-	case "session_picker":
+	case state.OverlaySessionPicker:
 		_, cmd := a.sessionPicker.Update(msg)
 		return a, cmd
-	case "model_picker":
+	case state.OverlayModelPicker:
 		_, cmd := a.modelPicker.Update(msg)
 		return a, cmd
 	}
@@ -279,30 +300,36 @@ func (a *App) handleMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 // handleKeyMsg 根据当前模式分发键盘消息。
 func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Esc always closes any active overlay first (global escape hatch)
-	if a.state.Overlay.Active != "" {
+	if a.state.Overlay.Active != state.OverlayNone {
 		if msg.String() == "esc" {
-			a.state.Overlay.Active = ""
-			a.state.Overlay.Query = ""
-			a.state.Overlay.Selected = 0
+			// 关闭 overlay 并清理 Normal 子状态（搜索/Ex 输入）。
+			a.closeOverlay()
+			a.clearSearchAndEx()
 			return a, nil
 		}
 	}
 	// 浮层激活时，键盘消息交给对应浮层组件处理
 	switch a.state.Overlay.Active {
-	case "palette":
+	case state.OverlayPalette:
 		_, cmd := a.palette.Update(msg)
 		return a, cmd
-	case "help":
+	case state.OverlayHelp:
 		_, cmd := a.helpOverlay.Update(msg)
 		return a, cmd
-	case "session_picker":
+	case state.OverlaySessionPicker:
 		_, cmd := a.sessionPicker.Update(msg)
 		return a, cmd
-	case "model_picker":
+	case state.OverlayModelPicker:
 		_, cmd := a.modelPicker.Update(msg)
 		return a, cmd
-	case "confirm":
+	case state.OverlayConfirm:
 		_, cmd := a.confirmOverlay.Update(msg)
+		return a, cmd
+	case state.OverlayEx, state.OverlaySearch:
+		// Ex/Search 输入 overlay：所有按键路由给 cmdline 组件，
+		// 由它处理字符/Backspace/Enter/Esc（Esc/Ctrl+C 已在上方被全局拦截
+		// 关闭 overlay，此处主要处理字符输入与提交）。
+		_, cmd := a.cmdLine.Update(msg)
 		return a, cmd
 	}
 	switch a.state.Mode {
@@ -316,7 +343,20 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleInputModeKey 处理 Input Mode 下的键盘输入。
+//
+// 分层约定（plan-v4）：模式切换键在此拦截，不传给 prompt 编辑器。
+// Ctrl+D 不进 MatchInputKey，由本函数按输入框是否为空决定：
+//   - 输入为空 → EOF 退出程序
+//   - 输入非空 → 删除光标后字符（等同 delete），委派 prompt 处理
 func (a *App) handleInputModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Ctrl+D 上下文分发
+	if msg.String() == "ctrl+d" {
+		if strings.TrimSpace(a.state.Input.Text) == "" {
+			return a, tea.Quit
+		}
+		_, cmd := a.commandPrompt.Update(tea.KeyMsg{Type: tea.KeyDelete})
+		return a, cmd
+	}
 	action := keymap.MatchInputKey(msg.String())
 	switch action {
 	case keymap.ActionCtrlC:
@@ -325,7 +365,7 @@ func (a *App) handleInputModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.state.Mode = state.NormalMode
 		return a, nil
 	case keymap.ActionOpenPalette:
-		a.openOverlay("palette")
+		a.openOverlay(state.OverlayPalette)
 		return a, nil
 	case keymap.ActionLogViewer:
 		a.appendStream(state.StreamEntry{
@@ -342,89 +382,6 @@ func (a *App) handleInputModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// handleNormalModeKey 处理 Normal Mode 下的键盘输入。
-func (a *App) handleNormalModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	action := keymap.MatchNormalKey(msg.String())
-	switch action {
-	case keymap.ActionCtrlC:
-		return a.handleCtrlC()
-	case keymap.ActionEnterInput:
-		a.state.Mode = state.InputModeInput
-		return a, nil
-	case keymap.ActionScrollDown, keymap.ActionScrollUp,
-		keymap.ActionScrollTop, keymap.ActionScrollBottom:
-		_, cmd := a.agentStream.Update(msg)
-		return a, cmd
-	case keymap.ActionHalfPageDown, keymap.ActionHalfPageUp:
-		_, cmd := a.agentStream.Update(msg)
-		return a, cmd
-	case keymap.ActionLeader:
-		a.state.Mode = state.LeaderMode
-		return a, leaderTimeoutCmd()
-	case keymap.ActionQuit:
-		return a, tea.Quit
-	case keymap.ActionSearchForward:
-		// 搜索功能后续 Phase 实现，此处预留
-		return a, nil
-	case keymap.ActionSearchBackward:
-		a.openOverlay("help")
-		return a, nil
-	case keymap.ActionExCommand:
-		// Ex 命令行后续 Phase 实现，此处预留
-		return a, nil
-	default:
-		_, promptCmd := a.commandPrompt.Update(msg)
-		return a, promptCmd
-	}
-}
-
-// handleLeaderKey 处理 Leader Key 后缀。
-func (a *App) handleLeaderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	keyStr := msg.String()
-	if keyStr == "esc" || keyStr == "ctrl+c" {
-		a.state.Mode = state.NormalMode
-		return a, nil
-	}
-	action := keymap.MatchLeaderKey(keyStr)
-	a.state.Mode = state.NormalMode // Leader 后总是回到 Normal
-	switch action {
-	case keymap.ActionLeaderQuit:
-		return a, tea.Quit
-	case keymap.ActionLeaderPalette:
-		a.openOverlay("palette")
-		return a, nil
-	case keymap.ActionLeaderHelp:
-		a.openOverlay("help")
-		return a, nil
-	case keymap.ActionLeaderSwitchSession:
-		a.openOverlay("session_picker")
-		return a, nil
-	case keymap.ActionLeaderNewSession:
-		if a.client != nil {
-			return a, createSessionCmd(a.client)
-		}
-		return a, nil
-	case keymap.ActionLeaderToggleMode:
-		return a, a.toggleAgentMode()
-	case keymap.ActionLeaderFullAccess:
-		return a, a.toggleFullAccess()
-	case keymap.ActionLeaderLog:
-		a.appendStream(state.StreamEntry{
-			ID:        fmt.Sprintf("log-hint-%d", time.Now().UnixNano()),
-			Type:      "status",
-			Timestamp: time.Now(),
-			Content:   "Log viewer not yet available",
-			Metadata:  map[string]any{"done": true},
-		})
-		return a, nil
-	case keymap.ActionLeaderCompact:
-		return a, a.triggerCompact()
-	default:
-		return a, nil
-	}
-}
-
-// handleCtrlC 实现 Ctrl+C 双退保护：运行中取消、空闲双退。
 func (a *App) handleCtrlC() (tea.Model, tea.Cmd) {
 	phase := a.state.Runtime.Phase
 	if phase == state.RuntimePhaseRunning || phase == state.RuntimePhaseWaitingPermission || phase == state.RuntimePhaseWaitingUser {
@@ -466,6 +423,8 @@ func (a *App) handleSubmitMessage(msg components.SubmitMessageMsg) tea.Cmd {
 	if strings.TrimSpace(msg.Text) == "" {
 		return nil
 	}
+	// 记录最近一次用户输入，供 Leader Space r 重试使用。
+	a.lastUserText = msg.Text
 	// 立即将用户消息追加到 Stream 中以便渲染
 	a.appendStream(state.StreamEntry{
 		ID:        fmt.Sprintf("user-msg-%d", time.Now().UnixNano()),
@@ -526,7 +485,7 @@ func (a *App) cancelPrompt(mode string) {
 }
 
 // openOverlay 打开指定类型的浮层，重置搜索状态。
-func (a *App) openOverlay(overlayType string) {
+func (a *App) openOverlay(overlayType state.OverlayType) {
 	a.state.Overlay.Active = overlayType
 	a.state.Overlay.Query = ""
 	a.state.Overlay.Selected = 0
@@ -534,24 +493,23 @@ func (a *App) openOverlay(overlayType string) {
 
 // closeOverlay 关闭当前浮层，重置搜索与选中状态。
 func (a *App) closeOverlay() {
-	a.state.Overlay.Active = ""
+	a.state.Overlay.Active = state.OverlayNone
 	a.state.Overlay.Query = ""
 	a.state.Overlay.Selected = 0
 }
 
-// handlePaletteCommand 处理命令面板选择的命令。
 func (a *App) handlePaletteCommand(msg components.PaletteCommandMsg) tea.Cmd {
 	switch msg.Name {
 	case "/exit":
 		return tea.Quit
 	case "/help":
-		a.openOverlay("help")
+		a.openOverlay(state.OverlayHelp)
 		return nil
 	case "/session":
-		a.openOverlay("session_picker")
+		a.openOverlay(state.OverlaySessionPicker)
 		return nil
 	case "/model":
-		a.openOverlay("model_picker")
+		a.openOverlay(state.OverlayModelPicker)
 		return nil
 	case "/mode":
 		return a.toggleAgentMode()
@@ -579,13 +537,13 @@ func (a *App) handleSlashCommand(msg components.SlashCommandMsg) tea.Cmd {
 	case "/exit", "/quit":
 		return tea.Quit
 	case "/help":
-		a.openOverlay("help")
+		a.openOverlay(state.OverlayHelp)
 		return nil
 	case "/session":
-		a.openOverlay("session_picker")
+		a.openOverlay(state.OverlaySessionPicker)
 		return nil
 	case "/model":
-		a.openOverlay("model_picker")
+		a.openOverlay(state.OverlayModelPicker)
 		return nil
 	case "/mode":
 		return a.toggleAgentMode()
@@ -608,9 +566,14 @@ func (a *App) handleSlashCommand(msg components.SlashCommandMsg) tea.Cmd {
 }
 
 // handleSessionSelect 处理会话切换操作。
+//
+// 切换前先把当前活动会话 ID 存入 prevSessionID，供 Leader Space Space 回切。
 func (a *App) handleSessionSelect(msg components.SessionSelectMsg) tea.Cmd {
 	if a.client == nil {
 		return nil
+	}
+	if current := a.activeSessionID(); current != "" && current != msg.Session.ID {
+		a.prevSessionID = current
 	}
 	a.state.Gateway.ActiveSess = &msg.Session
 	return loadSessionCmd(a.client, msg.Session.ID)
@@ -710,7 +673,7 @@ func (a *App) openConfirm(title, message, action string, data map[string]any) {
 		Action:  action,
 		Data:    data,
 	}
-	a.state.Overlay.Active = "confirm"
+	a.state.Overlay.Active = state.OverlayConfirm
 	a.state.Overlay.Query = ""
 	a.state.Overlay.Selected = 0
 }
@@ -734,97 +697,6 @@ func (a *App) activeSessionTitle() string {
 	return "untitled"
 }
 
-// mainArea 渲染中部区域，按终端宽度决定 Inspector 右侧或纵向压缩显示。
-func (a *App) mainArea() string {
-	streamView := a.agentStream.View()
-	if !a.state.Layout.ShowInspector {
-		return streamView
-	}
-	inspectorView := a.softInspector.View()
-	if a.state.Layout.Width >= inspectorWideMin {
-		return lipgloss.JoinHorizontal(lipgloss.Top, streamView, "  ", inspectorView)
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, streamView, "", a.separatorLine(), inspectorView)
-}
-
-// separatorLine 渲染单条细线，用于区分主要区域而不使用边框。
-func (a *App) separatorLine() string {
-	width := a.state.Layout.Width
-	if width <= 0 {
-		width = 48
-	}
-	return theme.SubtleStyle().Render(strings.Repeat("─", width))
-}
-
-// fitViewToTerminal 将视图约束到当前终端尺寸，避免 resize 后自动换行或旧行残留。
-func (a *App) fitViewToTerminal(view string) string {
-	width := a.state.Layout.Width
-	height := a.state.Layout.Height
-	if width <= 0 {
-		return view
-	}
-	lines := strings.Split(view, "\n")
-	for i, line := range lines {
-		lines[i] = fitLine(line, width)
-	}
-	if height > 0 {
-		switch {
-		case len(lines) > height:
-			lines = lines[:height]
-		case len(lines) < height:
-			for len(lines) < height {
-				lines = append(lines, strings.Repeat(" ", width-1))
-			}
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-// fitLine 截断并补齐单行显示宽度，保留 ANSI 样式同时防止终端自动 wrap。
-func fitLine(line string, width int) string {
-	if width <= 0 {
-		return line
-	}
-	target := width - 1
-	if target <= 0 {
-		return ""
-	}
-	fitted := theme.Truncate(line, target)
-	lineWidth := theme.DisplayWidth(fitted)
-	if lineWidth < target {
-		fitted += strings.Repeat(" ", target-lineWidth)
-	}
-	return fitted
-}
-
-// applyInitialLoaded 将 Gateway 初始 RPC 结果写入 ViewState。
-func (a *App) applyInitialLoaded(msg initialLoadedMsg) {
-	a.lastErr = msg.errText
-	a.state.Gateway.Connected = msg.connected
-	a.state.Gateway.Sessions = append([]gateway.SessionSummary(nil), msg.sessions...)
-	a.state.Gateway.Models = append([]gateway.ModelInfo(nil), msg.models...)
-	a.state.Gateway.ActiveModel = msg.activeModel
-	a.eventCh = msg.eventCh
-	if msg.errText != "" {
-		a.state.Runtime.Phase = state.RuntimePhaseError
-	}
-	if len(msg.sessions) > 0 {
-		active := msg.sessions[0]
-		a.state.Gateway.ActiveSess = &active
-	}
-	if msg.detail != nil {
-		a.state.Runtime.Tokens = state.TokenUsage{
-			Input:  msg.detail.Usage.Input,
-			Output: msg.detail.Usage.Output,
-			Total:  msg.detail.Usage.Total,
-		}
-		for _, item := range msg.detail.Stream {
-			a.appendStream(streamEntryFromItem(item))
-		}
-	}
-}
-
-// appendStream 以追加新 entry 的方式维护不可变 StreamEntry 序列。
 func (a *App) appendStream(entry state.StreamEntry) {
 	a.state.Stream = append(a.state.Stream, entry)
 }
@@ -838,6 +710,7 @@ func (a *App) bindComponents() {
 	a.ambientStatus = components.NewAmbientStatus(a.state)
 	a.agentStream = components.NewAgentStream(a.state)
 	a.commandPrompt = components.NewCommandPrompt(a.state)
+	a.cmdLine = components.NewCmdLine(a.state)
 	a.softInspector = components.NewSoftInspector(a.state)
 	a.palette = components.NewPalette(a.state)
 	a.helpOverlay = components.NewHelpOverlay(a.state)
@@ -892,37 +765,6 @@ func (a *App) triggerCompact() tea.Cmd {
 	return nil
 }
 
-// debugLine 渲染调试模式下的最小运行信息。
-func (a *App) debugLine() string {
-	size := defaultTerminal
-	if a.state.Layout.Width > 0 || a.state.Layout.Height > 0 {
-		size = fmt.Sprintf("%dx%d", a.state.Layout.Width, a.state.Layout.Height)
-	}
-	return fmt.Sprintf(
-		"[debug] mode:%s  scenario:%s  events:%d  size:%s",
-		inputModeName(a.state.Mode),
-		a.scenario,
-		len(a.state.Stream),
-		size,
-	)
-}
-
-// streamEntryFromItem 将会话历史 DTO 映射为不可变 StreamEntry。
-func streamEntryFromItem(item gateway.StreamItem) state.StreamEntry {
-	return state.StreamEntry{
-		ID:        item.ID,
-		Type:      item.Kind,
-		Timestamp: item.CreatedAt,
-		Content:   item.Text,
-		Metadata: map[string]any{
-			"role":   item.Role,
-			"status": item.Status,
-			"done":   true,
-		},
-	}
-}
-
-// inputModeName 将输入模式转换为占位视图中的稳定文本。
 func inputModeName(mode state.InputMode) string {
 	switch mode {
 	case state.NormalMode:
@@ -940,204 +782,4 @@ func emptyDash(value string) string {
 		return "-"
 	}
 	return value
-}
-
-type initialLoadedMsg struct {
-	connected   bool
-	sessions    []gateway.SessionSummary
-	detail      *gateway.SessionDetail
-	models      []gateway.ModelInfo
-	activeModel string
-	eventCh     <-chan gateway.GatewayEvent
-	errText     string
-}
-
-type gatewayEventMsg struct {
-	event  gateway.GatewayEvent
-	closed bool
-}
-
-// loadInitialCmd 通过 Gateway 客户端加载初始状态，并建立首个会话的事件订阅。
-func loadInitialCmd(client gateway.Client) tea.Cmd {
-	return func() tea.Msg {
-		ctx := context.Background()
-		msg := initialLoadedMsg{}
-		if _, err := client.Health(ctx); err != nil {
-			msg.errText = err.Error()
-			return msg
-		}
-		msg.connected = true
-		sessions, err := client.ListSessions(ctx)
-		if err != nil {
-			msg.errText = err.Error()
-			return msg
-		}
-		msg.sessions = sessions
-		models, err := client.ListModels(ctx)
-		if err != nil {
-			msg.errText = err.Error()
-			return msg
-		}
-		msg.models = models
-		if len(sessions) == 0 {
-			return msg
-		}
-		activeModel, err := client.GetModel(ctx, sessions[0].ID)
-		if err != nil {
-			msg.errText = err.Error()
-			return msg
-		}
-		msg.activeModel = activeModel
-		detail, err := client.LoadSession(ctx, sessions[0].ID)
-		if err != nil {
-			msg.errText = err.Error()
-			return msg
-		}
-		msg.detail = detail
-		eventCh, err := client.SubscribeEvents(ctx, sessions[0].ID)
-		if err != nil {
-			msg.errText = err.Error()
-			return msg
-		}
-		msg.eventCh = eventCh
-		return msg
-	}
-}
-
-// waitEventCmd 等待 Gateway 事件 channel 的下一条事件，保持异步事件逐条进入 Update。
-func waitEventCmd(events <-chan gateway.GatewayEvent) tea.Cmd {
-	return func() tea.Msg {
-		event, ok := <-events
-		return gatewayEventMsg{event: event, closed: !ok}
-	}
-}
-
-// submitMessageCmd 调用 GatewayClient 发送用户消息，并把 ACK 转成 reducer 可消费事件。
-func submitMessageCmd(client gateway.Client, sessionID string, text string) tea.Cmd {
-	return func() tea.Msg {
-		ack, err := client.SendMessage(context.Background(), sessionID, text)
-		if err != nil {
-			return gatewayEventMsg{event: errorEvent(err)}
-		}
-		return gatewayEventMsg{event: gateway.GatewayEvent{
-			Type:      gateway.EventRunStarted,
-			SessionID: ack.SessionID,
-			RunID:     ack.RunID,
-			Payload:   map[string]any{"message": ack.Message, "accepted": ack.Accepted},
-			At:        time.Now(),
-		}}
-	}
-}
-
-// resolvePermissionCmd 调用 GatewayClient 提交权限决策，并把完成结果转成 GatewayEvent。
-func resolvePermissionCmd(client gateway.Client, decision gateway.PermissionDecision) tea.Cmd {
-	return func() tea.Msg {
-		if err := client.ResolvePermission(context.Background(), decision); err != nil {
-			return gatewayEventMsg{event: errorEvent(err)}
-		}
-		text := "permission denied"
-		if decision.Allow {
-			text = "permission allowed"
-		}
-		return gatewayEventMsg{event: gateway.GatewayEvent{
-			Type:      gateway.EventPermissionResolved,
-			SessionID: decision.SessionID,
-			RunID:     decision.RunID,
-			Payload:   map[string]any{"decision": decision.Reason, "message": text},
-			At:        time.Now(),
-		}}
-	}
-}
-
-// answerQuestionCmd 调用 GatewayClient 提交 ask_user 回答，并把完成结果转成 GatewayEvent。
-func answerQuestionCmd(client gateway.Client, answer gateway.UserQuestionAnswer) tea.Cmd {
-	return func() tea.Msg {
-		if err := client.AnswerUserQuestion(context.Background(), answer); err != nil {
-			return gatewayEventMsg{event: errorEvent(err)}
-		}
-		return gatewayEventMsg{event: gateway.GatewayEvent{
-			Type:      gateway.EventUserQuestionAnswered,
-			SessionID: answer.SessionID,
-			RunID:     answer.RunID,
-			Payload:   map[string]any{"answer": answer.Text, "message": "answer submitted"},
-			At:        time.Now(),
-		}}
-	}
-}
-
-// errorEvent 将 GatewayClient RPC 错误包装成统一错误事件。
-func errorEvent(err error) gateway.GatewayEvent {
-	return gateway.GatewayEvent{
-		Type:    gateway.EventError,
-		Payload: map[string]any{"message": err.Error()},
-		At:      time.Now(),
-	}
-}
-
-// cancelRunCmd 调用 GatewayClient 取消运行中的 Agent，并把完成结果转成 GatewayEvent。
-func cancelRunCmd(client gateway.Client, sessionID string, runID string) tea.Cmd {
-	return func() tea.Msg {
-		if err := client.CancelRun(context.Background(), sessionID, runID); err != nil {
-			return gatewayEventMsg{event: errorEvent(err)}
-		}
-		return gatewayEventMsg{event: gateway.GatewayEvent{
-			Type:      gateway.EventRunCancelled,
-			SessionID: sessionID,
-			RunID:     runID,
-			Payload:   map[string]any{"message": "run cancelled by user"},
-			At:        time.Now(),
-		}}
-	}
-}
-
-// loadSessionCmd 切换到指定会话并建立新的事件订阅。
-func loadSessionCmd(client gateway.Client, sessionID string) tea.Cmd {
-	return func() tea.Msg {
-		detail, err := client.LoadSession(context.Background(), sessionID)
-		if err != nil {
-			return gatewayEventMsg{event: errorEvent(err)}
-		}
-		eventCh, err := client.SubscribeEvents(context.Background(), sessionID)
-		if err != nil {
-			return gatewayEventMsg{event: errorEvent(err)}
-		}
-		return sessionSwitchedMsg{sessionID: sessionID, detail: detail, eventCh: eventCh}
-	}
-}
-
-// deleteSessionCmd 调用 GatewayClient 删除会话。
-func deleteSessionCmd(client gateway.Client, sessionID string) tea.Cmd {
-	return func() tea.Msg {
-		// Gateway Client 接口暂无 DeleteSession，此处预留
-		return gatewayEventMsg{event: gateway.GatewayEvent{
-			Type:      gateway.EventSessionDeleted,
-			SessionID: sessionID,
-			Payload:   map[string]any{"id": sessionID, "message": "session deleted"},
-			At:        time.Now(),
-		}}
-	}
-}
-
-// sessionSwitchedMsg 表示会话切换完成。
-type sessionSwitchedMsg struct {
-	sessionID string
-	detail    *gateway.SessionDetail
-	eventCh   <-chan gateway.GatewayEvent
-}
-
-// sessionCreatedMsg 表示新会话创建完成。
-type sessionCreatedMsg struct {
-	Session *gateway.SessionSummary
-	err     error
-}
-
-// createSessionCmd 通过 GatewayClient 创建新会话。
-func createSessionCmd(client gateway.Client) tea.Cmd {
-	return func() tea.Msg {
-		summary, err := client.CreateSession(context.Background())
-		if err != nil {
-			return sessionCreatedMsg{err: err}
-		}
-		return sessionCreatedMsg{Session: summary}
-	}
 }

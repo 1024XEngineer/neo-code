@@ -54,7 +54,7 @@ func TestHelpOverlayLifecycle(t *testing.T) {
 	vs := state.NewViewState()
 	vs.Layout.Width = 60
 	vs.Layout.Height = 24
-	vs.Overlay.Active = "help"
+	vs.Overlay.Active = state.OverlayHelp
 	h := NewHelpOverlay(vs)
 
 	if h.Init() != nil {
@@ -62,14 +62,14 @@ func TestHelpOverlayLifecycle(t *testing.T) {
 	}
 	// esc/ctrl+c/q/? 关闭浮层
 	for _, m := range []tea.Msg{keyType(tea.KeyEsc), keyType(tea.KeyCtrlC), keyMsg("q"), keyMsg("?")} {
-		vs.Overlay.Active = "help"
+		vs.Overlay.Active = state.OverlayHelp
 		_, _ = h.Update(m)
 		if vs.Overlay.Active != "" {
 			t.Fatalf("%v should close help overlay", m)
 		}
 	}
 	// 其它键不关闭
-	vs.Overlay.Active = "help"
+	vs.Overlay.Active = state.OverlayHelp
 	_, _ = h.Update(keyMsg("x"))
 	if vs.Overlay.Active != "help" {
 		t.Fatal("unrelated key should not close help")

@@ -36,7 +36,7 @@ func (h *HelpOverlay) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch key.String() {
 	case "esc", "ctrl+c", "q", "?":
-		h.state.Overlay.Active = ""
+		h.state.Overlay.Active = state.OverlayNone
 		return h, nil
 	}
 	return h, nil

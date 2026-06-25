@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"neo-code/internal/tuiv2/state"
 	"neo-code/internal/tuiv2/theme"
@@ -108,16 +109,26 @@ func (c *CommandPrompt) View() string {
 }
 
 // handleInputKey 处理普通消息输入、历史切换、换行和提交。
+//
+// 分层约定（plan-v4）：模式切换键（Esc 进 Normal、i 在 Normal 下进 Input）已
+// 由 app 层 handleInputModeKey/handleNormalModeKey 拦截，不会到达本函数。
+// 本函数只负责编辑操作（字符插入、删除、光标移动、行编辑、发送、历史切换）。
 func (c *CommandPrompt) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
-	case "esc":
-		c.state.Mode = state.NormalMode
-	case "i":
-		if c.state.Mode == state.NormalMode {
-			c.state.Mode = state.InputModeInput
-		} else {
-			c.insertRunes(msg.Runes)
-		}
+	case "ctrl+a":
+		c.state.Input.Cursor = 0
+		c.state.Input.CursorVisible = true
+		return nil
+	case "ctrl+e":
+		c.state.Input.Cursor = runeLen(c.state.Input.Text)
+		c.state.Input.CursorVisible = true
+		return nil
+	case "ctrl+k":
+		c.killToEnd()
+		return nil
+	case "ctrl+w":
+		c.deleteWordBack()
+		return nil
 	case "left":
 		c.moveCursor(-1)
 	case "right":
@@ -159,6 +170,49 @@ func (c *CommandPrompt) handleInputKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// killToEnd 删除从光标到行尾的所有字符（Ctrl+K，Readline 语义）。
+func (c *CommandPrompt) killToEnd() {
+	runes := []rune(c.state.Input.Text)
+	cursor := clampInt(c.state.Input.Cursor, 0, len(runes))
+	if cursor >= len(runes) {
+		return
+	}
+	c.state.Input.Text = string(runes[:cursor])
+	c.state.Input.CursorVisible = true
+	c.state.Input.HistoryIndex = -1
+}
+
+// deleteWordBack 删除光标前一个词（Ctrl+W，按空格与标点分词）。
+func (c *CommandPrompt) deleteWordBack() {
+	runes := []rune(c.state.Input.Text)
+	cursor := clampInt(c.state.Input.Cursor, 0, len(runes))
+	if cursor == 0 {
+		return
+	}
+	// 跳过光标前的连续空白
+	end := cursor
+	for end > 0 && isWordBoundary(runes[end-1]) {
+		end--
+	}
+	// 跳过一个词的非边界字符
+	for end > 0 && !isWordBoundary(runes[end-1]) {
+		end--
+	}
+	c.state.Input.Text = string(append(append([]rune(nil), runes[:end]...), runes[cursor:]...))
+	c.state.Input.Cursor = end
+	c.state.Input.CursorVisible = true
+	c.state.Input.HistoryIndex = -1
+}
+
+// isWordBoundary 判断 rune 是否为分词边界（空白与常见标点）。
+func isWordBoundary(r rune) bool {
+	switch r {
+	case ' ', '\t', '\n', '.', ',', ';', ':', '/', '\\', '(', ')', '[', ']', '{', '}', '"', '\'', '=', '-', '_':
+		return true
+	}
+	return false
 }
 
 // handlePermissionKey 处理权限模式的一键响应，不要求用户再按 Enter。
@@ -327,18 +381,46 @@ func (c *CommandPrompt) renderQuestionHint() string {
 }
 
 // modeLine 渲染输入模式、会话名和当前模型，并把右侧信息固定到行尾。
+//
+// 左侧模式指示按当前模式着色：input=BaseStyle(FG)、normal=SubtleStyle、
+// leader=AccentStyle 加粗（不加闪烁，加粗已足够区分）。右侧会话与模型信息
+// 始终用 SubtleStyle。
 func (c *CommandPrompt) modeLine() string {
-	left := fmt.Sprintf("[%s]", inputModeName(c.state.Mode))
-	right := strings.TrimSpace(sessionTitle(c.state) + "   " + stringOrDash(c.state.Gateway.ActiveModel))
+	return c.renderModeLine()
+}
+
+// ModeLine 导出 modeLine 渲染，供 App 在 Ex/Search overlay 时复用状态行。
+func (c *CommandPrompt) ModeLine() string {
+	return c.renderModeLine()
+}
+
+// renderModeLine 是 modeLine 的实际实现，供 modeLine 与 ModeLine 共用。
+func (c *CommandPrompt) renderModeLine() string {
+	leftText := fmt.Sprintf("[%s]", inputModeName(c.state.Mode))
+	rightText := strings.TrimSpace(sessionTitle(c.state) + "   " + stringOrDash(c.state.Gateway.ActiveModel))
+	leftStyled := modeIndicatorStyle(c.state.Mode).Render(leftText)
+	rightStyled := theme.SubtleStyle().Render(rightText)
 	width := c.contentWidth()
 	if width <= 0 {
-		return theme.SubtleStyle().Render(left + "   " + right)
+		return leftStyled + "   " + rightStyled
 	}
-	gap := width - theme.DisplayWidth(left) - theme.DisplayWidth(right)
+	gap := width - theme.DisplayWidth(leftText) - theme.DisplayWidth(rightText)
 	if gap < 1 {
-		return theme.SubtleStyle().Render(left + " " + right)
+		return leftStyled + " " + rightStyled
 	}
-	return theme.SubtleStyle().Render(left + strings.Repeat(" ", gap) + right)
+	return leftStyled + strings.Repeat(" ", gap) + rightStyled
+}
+
+// modeIndicatorStyle 根据输入模式返回模式指示器的样式。
+func modeIndicatorStyle(mode state.InputMode) lipgloss.Style {
+	switch mode {
+	case state.NormalMode:
+		return theme.SubtleStyle()
+	case state.LeaderMode:
+		return theme.AccentStyle().Bold(true)
+	default: // InputModeInput
+		return theme.BaseStyle()
+	}
 }
 
 // textWithCursor 返回在当前光标位置插入闪烁光标后的文本。
@@ -537,6 +619,19 @@ func inputModeName(mode state.InputMode) string {
 // runeLen 返回字符串的 rune 数量。
 func runeLen(text string) int {
 	return len([]rune(text))
+}
+
+// deleteLastRune 删除字符串末尾一个 rune，正确处理多字节 UTF-8（中文/emoji/组合字符）。
+// 空字符串原样返回。使用 utf8.DecodeLastRuneInString 零分配计算末尾 rune 字节数。
+// 灵感来自 v1 的 trimLastRune（v1 多了 size 边界防御守卫，此处省略——在 Go stdlib
+// 合约下 DecodeLastRuneInString 对合法 UTF-8 输入恒返回 size>=1，对无效序列返回
+// (RuneError,1) 逐字节自愈，无需额外守卫）。供 cmdline 的 Backspace 编辑复用。
+func deleteLastRune(s string) string {
+	if s == "" {
+		return s
+	}
+	_, size := utf8.DecodeLastRuneInString(s)
+	return s[:len(s)-size]
 }
 
 // clampInt 将整数限制在给定闭区间内。

@@ -169,6 +169,7 @@ func cloneViewState(current *ViewState) *ViewState {
 	next.Stream = append([]StreamEntry(nil), current.Stream...)
 	next.Input.Options = append([]string(nil), current.Input.Options...)
 	next.Input.History = append([]string(nil), current.Input.History...)
+	next.Search.Matches = append([]int(nil), current.Search.Matches...)
 	return &next
 }
 

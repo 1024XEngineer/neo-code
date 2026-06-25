@@ -1,8 +1,10 @@
 package tuiv2
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -82,9 +84,9 @@ func TestCancelPromptResetsInputAndLogs(t *testing.T) {
 
 func TestSlashCommandDispatch(t *testing.T) {
 	cases := map[string]func(*App) bool{
-		"/session": func(a *App) bool { return a.state.Overlay.Active == "session_picker" },
-		"/model":   func(a *App) bool { return a.state.Overlay.Active == "model_picker" },
-		"/help":    func(a *App) bool { return a.state.Overlay.Active == "help" },
+		"/session": func(a *App) bool { return a.state.Overlay.Active == state.OverlaySessionPicker },
+		"/model":   func(a *App) bool { return a.state.Overlay.Active == state.OverlayModelPicker },
+		"/help":    func(a *App) bool { return a.state.Overlay.Active == state.OverlayHelp },
 		"/mode":    func(a *App) bool { return a.state.Runtime.AgentMode == "build" },
 		"/compact": func(a *App) bool { return lastContains(a, "Compact triggered") },
 		"/clear":   func(a *App) bool { return len(a.state.Stream) == 0 },
@@ -108,9 +110,9 @@ func TestSlashCommandDispatch(t *testing.T) {
 
 func TestPaletteCommandDispatch(t *testing.T) {
 	cases := map[string]func(*App) bool{
-		"/session":    func(a *App) bool { return a.state.Overlay.Active == "session_picker" },
-		"/model":      func(a *App) bool { return a.state.Overlay.Active == "model_picker" },
-		"/help":       func(a *App) bool { return a.state.Overlay.Active == "help" },
+		"/session":    func(a *App) bool { return a.state.Overlay.Active == state.OverlaySessionPicker },
+		"/model":      func(a *App) bool { return a.state.Overlay.Active == state.OverlayModelPicker },
+		"/help":       func(a *App) bool { return a.state.Overlay.Active == state.OverlayHelp },
 		"/mode":       func(a *App) bool { return a.state.Runtime.AgentMode == "build" },
 		"/compact":    func(a *App) bool { return lastContains(a, "Compact triggered") },
 		"/checkpoint": func(a *App) bool { return lastContains(a, "not yet implemented") },
@@ -352,10 +354,10 @@ func TestNormalModeKeyDispatch(t *testing.T) {
 }
 
 func TestLeaderKeyDispatch(t *testing.T) {
-	cases := map[string]string{
-		"p": "palette",
-		"s": "session_picker",
-		"h": "help",
+	cases := map[string]state.OverlayType{
+		"p": state.OverlayPalette,
+		"s": state.OverlaySessionPicker,
+		"h": state.OverlayHelp,
 	}
 	for key, wantOverlay := range cases {
 		t.Run(key, func(t *testing.T) {
@@ -371,7 +373,8 @@ func TestLeaderKeyDispatch(t *testing.T) {
 			}
 		})
 	}
-	// m -> toggle mode, f -> full access, c -> compact, l -> log（均返回 nil）
+	// m -> model picker(openOverlay nil), f -> full access(nil),
+	// c -> cancel run(空闲 nil), l -> log(nil)（均返回 nil cmd）
 	for _, key := range []string{"m", "f", "c", "l"} {
 		app := newReadyApp(t)
 		app.state.Mode = state.LeaderMode
@@ -392,6 +395,70 @@ func TestLeaderKeyDispatch(t *testing.T) {
 	app = updated.(*App)
 	if app.state.Mode != state.NormalMode {
 		t.Fatalf("leader esc should reset to normal, mode=%v", app.state.Mode)
+	}
+}
+
+// TestLeaderNewActions 覆盖 Phase 10 新增的 Leader 动作：m/c/r/space 与边界。
+func TestLeaderNewActions(t *testing.T) {
+	// m -> model_picker overlay
+	app := newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	app.Update(keyRunes("m"))
+	if app.state.Overlay.Active != state.OverlayModelPicker {
+		t.Fatalf("leader m: overlay=%q, want model_picker", app.state.Overlay.Active)
+	}
+
+	// c 运行中 -> cancel cmd；空闲 -> nil
+	app = newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	app.state.Runtime.Phase = state.RuntimePhaseRunning
+	if _, cmd := app.Update(keyRunes("c")); cmd == nil {
+		t.Fatal("leader c running should return cancel cmd")
+	}
+	app = newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	if _, cmd := app.Update(keyRunes("c")); cmd != nil {
+		t.Fatal("leader c idle should return nil")
+	}
+
+	// r 无历史 -> 提示 nil；有历史 -> submit cmd
+	app = newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	if _, cmd := app.Update(keyRunes("r")); cmd != nil {
+		t.Fatal("leader r with no history should return nil")
+	}
+	if !lastContains(app, "No previous run to retry") {
+		t.Fatalf("leader r hint missing: %v", streamContents(app))
+	}
+	app = newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	app.lastUserText = "hello"
+	if _, cmd := app.Update(keyRunes("r")); cmd == nil {
+		t.Fatal("leader r with history should return submit cmd")
+	}
+
+	// space 无上一会话 -> 提示 nil；有上一会话 -> load cmd
+	app = newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	if _, cmd := app.Update(keyRunes(" ")); cmd != nil {
+		t.Fatal("leader space with no prev session should return nil")
+	}
+	if !lastContains(app, "No previous session to switch") {
+		t.Fatalf("leader space hint missing: %v", streamContents(app))
+	}
+	app = newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	app.prevSessionID = "sess-prev"
+	if _, cmd := app.Update(keyRunes(" ")); cmd == nil {
+		t.Fatal("leader space with prev session should return load cmd")
+	}
+
+	// 非后缀键 -> 静默回 Normal，不执行动作
+	app = newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	app.Update(keyRunes("x"))
+	if app.state.Mode != state.NormalMode {
+		t.Fatalf("leader non-suffix should reset to normal, mode=%v", app.state.Mode)
 	}
 }
 
@@ -418,6 +485,176 @@ func TestInputModeKeyDispatch(t *testing.T) {
 	}
 }
 
+// TestCtrlDContextual 覆盖 Ctrl+D 三态分发。
+func TestCtrlDContextual(t *testing.T) {
+	// Input 空输入 → EOF 退出（tea.Quit）
+	app := newReadyApp(t)
+	app.state.Mode = state.InputModeInput
+	app.state.Input.Text = ""
+	_, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	if cmd == nil {
+		t.Fatal("ctrl+d empty input should return quit cmd")
+	}
+
+	// Input 非空 → 删字符（不退出）
+	app = newReadyApp(t)
+	app.state.Mode = state.InputModeInput
+	app.state.Input.Text = "abc"
+	app.state.Input.Cursor = 3
+	_, cmd = app.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	// 删除后文本应变少（delete 删光标后字符，光标在末尾时 no-op，移到中间验证）
+	app.state.Input.Cursor = 1
+	app.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	if app.state.Input.Text != "ac" {
+		t.Fatalf("ctrl+d non-empty should delete char after cursor, text=%q", app.state.Input.Text)
+	}
+
+	// Normal → 半页下翻（路由 stream，不退出）
+	app = newReadyApp(t)
+	app.state.Mode = state.NormalMode
+	_, cmd = app.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	if cmd != nil {
+		t.Fatal("normal ctrl+d should route to stream, nil cmd")
+	}
+}
+
+// TestExCommand 覆盖 : 命令行各分支。
+func TestExCommand(t *testing.T) {
+	cases := map[string]func(*App) bool{
+		"":        func(a *App) bool { return lastContains(a, "Unknown ex command") },
+		"debug":   func(a *App) bool { return a.debug },
+		"help":    func(a *App) bool { return a.state.Overlay.Active == state.OverlayHelp },
+		"compact": func(a *App) bool { return lastContains(a, "Compact triggered") },
+		"mode":    func(a *App) bool { return a.state.Runtime.AgentMode == "build" },
+		"bogus":   func(a *App) bool { return lastContains(a, "Unknown ex command") },
+	}
+	for cmd, check := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			app := newReadyApp(t)
+			app.Update(components.ExCommandMsg{Command: cmd})
+			if !check(app) {
+				t.Fatalf("ex %q failed: overlay=%q stream=%v", cmd, app.state.Overlay.Active, streamContents(app))
+			}
+		})
+	}
+	// q/quit/exit → tea.Quit
+	app := newReadyApp(t)
+	if _, cmd := app.Update(components.ExCommandMsg{Command: "q"}); cmd == nil {
+		t.Fatal("ex q should return quit cmd")
+	}
+}
+
+// TestExAndSearchOverlayFlow 覆盖 Normal 下 : 与 / 进入输入、提交、取消。
+func TestExAndSearchOverlayFlow(t *testing.T) {
+	// Normal 下 : → 打开 Ex overlay
+	app := newReadyApp(t)
+	app.state.Mode = state.NormalMode
+	app.Update(keyRunes(":"))
+	if app.state.Overlay.Active != state.OverlayEx {
+		t.Fatalf("normal : should open ex overlay, got %q", app.state.Overlay.Active)
+	}
+	// 字符路由给 cmdLine
+	app.Update(keyRunes("q"))
+	if app.state.Ex.Input != "q" {
+		t.Fatalf("ex input=%q, want q", app.state.Ex.Input)
+	}
+	// Backspace 删除
+	app.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	if app.state.Ex.Input != "" {
+		t.Fatalf("ex backspace input=%q, want empty", app.state.Ex.Input)
+	}
+	// ExCommandMsg 提交后关闭 Ex overlay（直接驱动，模拟 runtime 投递）
+	app.openEx()
+	app.Update(components.ExCommandMsg{Command: "debug"})
+	if app.state.Overlay.Active != state.OverlayNone {
+		t.Fatalf("ex command submit should close overlay, got %q", app.state.Overlay.Active)
+	}
+
+	// Normal 下 / → 打开 Search overlay
+	app = newReadyApp(t)
+	app.state.Mode = state.NormalMode
+	app.Update(keyRunes("/"))
+	if app.state.Overlay.Active != state.OverlaySearch {
+		t.Fatalf("normal / should open search overlay, got %q", app.state.Overlay.Active)
+	}
+	app.Update(keyRunes("e"))
+	app.Update(keyRunes("r"))
+	app.Update(keyRunes("r"))
+	if app.state.Search.Query != "err" {
+		t.Fatalf("search query=%q, want err", app.state.Search.Query)
+	}
+
+	// Esc 关闭 overlay 并清理
+	app = newReadyApp(t)
+	app.openSearch()
+	app.state.Search.Query = "x"
+	app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if app.state.Overlay.Active != state.OverlayNone {
+		t.Fatal("esc should close search overlay")
+	}
+	if app.state.Search.Query != "" {
+		t.Fatalf("esc should clear search query, got %q", app.state.Search.Query)
+	}
+}
+
+// TestSearchSubmitAndJump 覆盖搜索提交、n/N 跳转、stale 标记。
+func TestSearchSubmitAndJump(t *testing.T) {
+	app := newReadyApp(t)
+	// 注入含匹配的 stream 内容
+	app.appendStream(state.StreamEntry{ID: "1", Type: "message", Content: "hello error world"})
+	app.appendStream(state.StreamEntry{ID: "2", Type: "message", Content: "all good"})
+	app.appendStream(state.StreamEntry{ID: "3", Type: "message", Content: "another ERROR"})
+
+	// 提交搜索 error
+	app.Update(components.SearchSubmitMsg{Query: "error"})
+	if len(app.state.Search.Matches) != 2 {
+		t.Fatalf("matches=%v, want 2", app.state.Search.Matches)
+	}
+	if app.state.Search.Stale {
+		t.Fatal("fresh search should not be stale")
+	}
+
+	// n → 跳到下一个
+	firstIdx := app.state.Search.MatchIndex
+	app.state.Mode = state.NormalMode
+	app.Update(keyRunes("n"))
+	if app.state.Search.MatchIndex == firstIdx {
+		t.Fatal("n should advance match index")
+	}
+	// N → 回到上一个
+	app.Update(keyRunes("N"))
+
+	// 无匹配搜索
+	app.Update(components.SearchSubmitMsg{Query: "zzz"})
+	if app.state.Search.Matches != nil {
+		t.Fatalf("no match should set Matches nil, got %v", app.state.Search.Matches)
+	}
+	// n 在无匹配时 no-op 不崩溃
+	app.Update(keyRunes("n"))
+
+	// 空查询 no-op
+	app.Update(components.SearchSubmitMsg{Query: "   "})
+}
+
+// TestSearchStaleOnStreamGrowth 覆盖 stream 增长后 stale 标记。
+func TestSearchStaleOnStreamGrowth(t *testing.T) {
+	app := newReadyApp(t)
+	app.appendStream(state.StreamEntry{ID: "1", Type: "message", Content: "error one"})
+	app.Update(components.SearchSubmitMsg{Query: "error"})
+	if app.state.Search.Stale {
+		t.Fatal("search should not be stale initially")
+	}
+	// 模拟 gateway 事件追加 stream
+	app.Update(gatewayEventMsg{event: gateway.GatewayEvent{
+		Type:    gateway.EventAgentMessageStart,
+		At:      time.Now(),
+		Payload: map[string]any{"text": "new error"},
+	}})
+	if !app.state.Search.Stale {
+		t.Fatal("search should be stale after stream growth")
+	}
+}
+
 func TestRouteStreamKey(t *testing.T) {
 	app := newReadyApp(t)
 	if ok, _ := app.routeStreamKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}); !ok {
@@ -440,7 +677,7 @@ func TestHandleMouseMsgMainViewAndOverlays(t *testing.T) {
 	app.Update(tea.MouseMsg{Type: tea.MouseWheelDown})
 
 	// 浮层鼠标分发不 panic：组件按 Button 判定，故设置 Button
-	for _, active := range []string{"palette", "session_picker", "model_picker"} {
+	for _, active := range []state.OverlayType{state.OverlayPalette, state.OverlaySessionPicker, state.OverlayModelPicker} {
 		app := newReadyApp(t)
 		app.openOverlay(active)
 		app.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
@@ -451,9 +688,12 @@ func TestHandleMouseMsgMainViewAndOverlays(t *testing.T) {
 // ---- View 各路径 ----
 
 func TestViewOverlayAndMainPaths(t *testing.T) {
-	overlays := []string{"palette", "help", "session_picker", "model_picker", "confirm"}
+	overlays := []state.OverlayType{
+		state.OverlayPalette, state.OverlayHelp,
+		state.OverlaySessionPicker, state.OverlayModelPicker, state.OverlayConfirm,
+	}
 	for _, ov := range overlays {
-		t.Run(ov, func(t *testing.T) {
+		t.Run(string(ov), func(t *testing.T) {
 			app := newReadyApp(t)
 			app.openOverlay(ov)
 			if app.state.Overlay.Active != ov {
@@ -569,4 +809,155 @@ func separatorLineHelper(width int) string {
 	app := NewApp(StartupConfig{Backend: "fake", Scenario: "default"}).(*App)
 	app.state.Layout.Width = width
 	return app.separatorLine()
+}
+
+// ---- 第 1 轮审查盲区补测 ----
+
+// TestLeaderTimeoutCmdAndRecovery 覆盖 leaderTimeoutCmd 与超时回退分支（原 50%）。
+func TestLeaderTimeoutCmdAndRecovery(t *testing.T) {
+	cmd := leaderTimeoutCmd()
+	if cmd == nil {
+		t.Fatal("leaderTimeoutCmd should return non-nil cmd")
+	}
+	msg := cmd()
+	if msg == nil {
+		t.Fatal("leader timeout cmd produced nil msg")
+	}
+	app := newReadyApp(t)
+	app.state.Mode = state.LeaderMode
+	app.Update(msg)
+	if app.state.Mode != state.NormalMode {
+		t.Fatalf("leader timeout should reset to normal, mode=%v", app.state.Mode)
+	}
+	app = newReadyApp(t)
+	app.state.Mode = state.InputModeInput
+	beforeMode := app.state.Mode
+	app.Update(msg)
+	if app.state.Mode != beforeMode {
+		t.Fatalf("leader timeout in non-leader mode should be no-op, mode=%v", app.state.Mode)
+	}
+}
+
+// TestScrollToStreamIndexBoundaries 直接覆盖 scrollToStreamIndex 边界（原 71.4%）。
+func TestScrollToStreamIndexBoundaries(t *testing.T) {
+	app := newReadyApp(t)
+	app.appendStream(state.StreamEntry{ID: "1", Type: "message", Content: "a"})
+	app.appendStream(state.StreamEntry{ID: "2", Type: "message", Content: "b"})
+	app.scrollToStreamIndex(0)
+	if app.state.Layout.AutoScroll {
+		t.Fatal("scrollToStreamIndex should disable AutoScroll")
+	}
+	prevOffset := app.state.Layout.ScrollOffset
+	app.scrollToStreamIndex(-1)
+	if app.state.Layout.ScrollOffset != prevOffset {
+		t.Fatal("scrollToStreamIndex(-1) should be no-op")
+	}
+	app.scrollToStreamIndex(100)
+	if app.state.Layout.ScrollOffset != prevOffset {
+		t.Fatal("scrollToStreamIndex(overflow) should be no-op")
+	}
+	emptyApp := newReadyApp(t)
+	emptyApp.state.Stream = nil
+	emptyApp.scrollToStreamIndex(0)
+}
+
+// TestCancelCurrentRunNoClient 覆盖 cancelCurrentRun 在 client==nil 的分支（原 71.4%）。
+func TestCancelCurrentRunNoClient(t *testing.T) {
+	app := NewApp(StartupConfig{Backend: "fake", Scenario: "default"}).(*App)
+	app.state.Runtime.Phase = state.RuntimePhaseRunning
+	cmd := app.cancelCurrentRun()
+	if cmd != nil {
+		t.Fatal("cancelCurrentRun without client should return nil cmd")
+	}
+	if app.state.Runtime.Phase != state.RuntimePhaseCancelled {
+		t.Fatalf("phase=%s, want cancelled", app.state.Runtime.Phase)
+	}
+	app2 := NewApp(StartupConfig{Backend: "fake", Scenario: "default"}).(*App)
+	app2.state.Runtime.Phase = state.RuntimePhaseIdle
+	cmd = app2.cancelCurrentRun()
+	if cmd != nil {
+		t.Fatal("cancelCurrentRun idle without client should return nil")
+	}
+	if app2.state.Runtime.Phase != state.RuntimePhaseIdle {
+		t.Fatal("idle phase should be unchanged")
+	}
+}
+
+// TestPromptModeLineExported 覆盖导出的 ModeLine 方法（原 0%）。
+func TestPromptModeLineExported(t *testing.T) {
+	vs := state.NewViewState()
+	vs.Layout.Width = 80
+	p := components.NewCommandPrompt(vs)
+	for _, mode := range []state.InputMode{state.InputModeInput, state.NormalMode, state.LeaderMode} {
+		vs.Mode = mode
+		if v := p.ModeLine(); v == "" {
+			t.Fatalf("ModeLine() empty for mode %v", mode)
+		}
+	}
+}
+
+// TestLoadInitialCmdErrorPaths 覆盖 loadInitialCmd 的失败分支（原 71.4%）。
+func TestLoadInitialCmdErrorPaths(t *testing.T) {
+	client, _ := fakegateway.NewFakeClient(fakegateway.ScenarioGatewayOffline)
+	msg := loadInitialCmd(client)()
+	loaded, ok := msg.(initialLoadedMsg)
+	if !ok {
+		t.Fatalf("expected initialLoadedMsg, got %T", msg)
+	}
+	if loaded.errText == "" {
+		t.Fatal("offline scenario should set errText")
+	}
+	client2, _ := fakegateway.NewFakeClient(fakegateway.ScenarioDefault)
+	_ = client2.Close()
+	msg2 := loadInitialCmd(client2)()
+	loaded2, ok := msg2.(initialLoadedMsg)
+	if !ok {
+		t.Fatalf("expected initialLoadedMsg on closed client, got %T", msg2)
+	}
+	if loaded2.errText == "" {
+		t.Fatal("closed client should set errText")
+	}
+}
+
+// TestExecuteSearchEmptyStream 覆盖空 stream 下的搜索（边界）。
+func TestExecuteSearchEmptyStream(t *testing.T) {
+	app := newReadyApp(t)
+	app.state.Stream = nil
+	app.executeSearch("anything")
+	if app.state.Search.Matches != nil {
+		t.Fatal("empty stream search should yield nil matches")
+	}
+}
+
+// TestExecuteExCommandEmpty 覆盖空 ex 命令的提示分支。
+func TestExecuteExCommandEmpty(t *testing.T) {
+	app := newReadyApp(t)
+	app.executeExCommand("")
+	if !lastContains(app, "Unknown ex command") {
+		t.Fatalf("empty ex command should hint unknown, stream=%v", streamContents(app))
+	}
+}
+
+// TestSearchJumpTargetVisibleInAppView 端到端：搜索跳转后目标内容在 App.View 可见。
+// 这是 PR 审核反馈的核心修复点——旧代码跳转后匹配项落在视口外。
+func TestSearchJumpTargetVisibleInAppView(t *testing.T) {
+	app := newReadyApp(t)
+	// 注入足够多的 entry 使视口装不下
+	for i := 0; i < 30; i++ {
+		app.appendStream(state.StreamEntry{
+			ID:      fmt.Sprintf("e-%d", i),
+			Type:    "message",
+			Content: fmt.Sprintf("content-%d", i),
+		})
+	}
+	// 搜索靠后的唯一内容
+	app.Update(components.SearchSubmitMsg{Query: "content-28"})
+	if len(app.state.Search.Matches) == 0 {
+		t.Fatal("search should match content-28")
+	}
+	// n/N 跳转后 View 应含目标
+	view := app.View()
+	if !strings.Contains(view, "content-28") {
+		t.Fatalf("search jump: target content-28 not visible after jump, offset=%d", app.state.Layout.ScrollOffset)
+	}
 }
