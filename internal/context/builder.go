@@ -11,24 +11,26 @@ type DefaultBuilder struct {
 	trimPolicy           messageTrimPolicy
 }
 
-// newStablePromptSources 返回稳定提示词来源列表，适合作为缓存前缀。
-// extra 会追加到 stable 中（如 memo 持久记忆索引）。
-func newStablePromptSources(extra ...SectionSource) []promptSectionSource {
-	sources := []promptSectionSource{
+// newStablePromptSources 返回稳定提示词来源列表，构成 prompt 缓存的可复用前缀。
+// 只有"进程生命周期内不变、且随工作区规则文件变化"的来源才允许进入本列表：
+// 任何随会话写入变化的来源一旦进入稳定段，都会让整个缓存前缀失效。
+func newStablePromptSources() []promptSectionSource {
+	return []promptSectionSource{
 		corePromptSource{},
 		newRulesPromptSource(nil),
 	}
+}
+
+// newDynamicPromptSources 返回动态提示词来源列表，随任务进度、会话状态变化。
+// extra 来源（如 memo 索引、会话记忆）排在最前：它们随写入变化，属于动态段而非缓存前缀。
+func newDynamicPromptSources(extra ...SectionSource) []promptSectionSource {
+	sources := make([]promptSectionSource, 0, len(extra)+7)
 	for _, src := range extra {
 		if src != nil {
 			sources = append(sources, src)
 		}
 	}
-	return sources
-}
-
-// newDynamicPromptSources 返回动态提示词来源列表，随任务进度、会话状态变化。
-func newDynamicPromptSources() []promptSectionSource {
-	return []promptSectionSource{
+	return append(sources,
 		capabilitiesSource{},
 		taskStateSource{},
 		planModeContextSource{},
@@ -36,14 +38,15 @@ func newDynamicPromptSources() []promptSectionSource {
 		skillPromptSource{},
 		repositoryContextSource{},
 		&systemStateSource{},
-	}
+	)
 }
 
 // NewConfiguredBuilder 基于可选 SectionSource 列表构建上下文构建器，是推荐的统一构造入口。
+// 传入的来源统一归入动态段，避免易变内容污染缓存前缀。
 func NewConfiguredBuilder(sources ...SectionSource) Builder {
 	return &DefaultBuilder{
-		stablePromptSources:  newStablePromptSources(sources...),
-		dynamicPromptSources: newDynamicPromptSources(),
+		stablePromptSources:  newStablePromptSources(),
+		dynamicPromptSources: newDynamicPromptSources(sources...),
 		trimPolicy:           spanMessageTrimPolicy{},
 	}
 }
