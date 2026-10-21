@@ -15,11 +15,23 @@ import (
 	"neo-code/internal/session"
 )
 
+// errorPrefix 是 chat/completions 适配层统一的错误前缀。
 const errorPrefix = "openaicompat provider: "
 
+// maxSessionAssetsTotalBytes 是单次请求允许携带的会话附件总字节上限。
 const maxSessionAssetsTotalBytes = provider.MaxSessionAssetsTotalBytes
 
+// htmlErrorSnippetMaxRunes 是错误响应中截取 HTML 片段的字符上限。
 const htmlErrorSnippetMaxRunes = 320
+
+// promptCacheKeyHexLength 与 provider.ComputePromptCacheKey 的输出长度保持一致。
+const promptCacheKeyHexLength = provider.PromptCacheKeyHexLength
+
+// computePromptCacheKey 委托 provider 层统一实现，保证 chat completions 与
+// responses 两种模式下同一前缀产生相同路由键。
+func computePromptCacheKey(model string, req providertypes.GenerateRequest) string {
+	return provider.ComputePromptCacheKey(model, req.ResolvedStablePrefix(), provider.PromptCacheToolNames(req.Tools))
+}
 
 // BuildRequest 将 provider.GenerateRequest 转换为 Chat Completions 请求结构。
 // 模型优先取 req.Model，其次使用配置中的默认模型。
@@ -45,6 +57,14 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 			Role:    providertypes.RoleSystem,
 			Content: req.SystemPrompt,
 		})
+	}
+
+	// OpenAI 的前缀缓存是自动的，但需要稳定前缀 + 稳定的路由键才能获得高命中率。
+	// 该驱动服务任意兼容网关，prompt_cache_key 属可选扩展参数，因此默认不发送，
+	// 需在 provider 配置中显式写 prompt_cache: auto 声明端点支持；
+	// 自研 HTTP 厂商（DeepSeek / Qwen / GLM 等）由硬约束排除。
+	if provider.ShouldSendPromptCacheKey(cfg.PromptCacheMode, cfg.Driver) {
+		payload.PromptCacheKey = computePromptCacheKey(model, req)
 	}
 
 	var usedSessionAssetBytes int64

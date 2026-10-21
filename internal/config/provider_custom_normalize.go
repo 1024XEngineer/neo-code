@@ -21,6 +21,7 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 		GenerateMaxRetriesSet:  input.GenerateMaxRetriesSet || input.GenerateMaxRetries > 0,
 		GenerateIdleTimeoutSec: normalizeOptionalGenerateInt(input.GenerateIdleTimeoutSec),
 		DiscoveryEndpointPath:  strings.TrimSpace(input.DiscoveryEndpointPath),
+		PromptCache:            strings.ToLower(strings.TrimSpace(input.PromptCache)),
 	}
 
 	if err := validateCustomProviderName(normalized.Name); err != nil {
@@ -121,6 +122,7 @@ func validateNormalizedCustomProviderInput(input SaveCustomProviderInput) error 
 		ChatAPIMode:            input.ChatAPIMode,
 		ChatEndpointPath:       input.ChatEndpointPath,
 		DiscoveryEndpointPath:  input.DiscoveryEndpointPath,
+		PromptCache:            input.PromptCache,
 		Models:                 input.Models,
 		Source:                 ProviderSourceCustom,
 	}

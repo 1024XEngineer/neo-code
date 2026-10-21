@@ -34,6 +34,16 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 		payload.Instructions = req.SystemPrompt
 	}
 
+	// 与 chat completions 共用同一套键计算，保证同一前缀在两种模式下路由一致。
+	// 该驱动服务任意兼容网关，默认不发送，需显式 prompt_cache: auto 声明端点支持。
+	if provider.ShouldSendPromptCacheKey(cfg.PromptCacheMode, cfg.Driver) {
+		payload.PromptCacheKey = provider.ComputePromptCacheKey(
+			model,
+			req.ResolvedStablePrefix(),
+			provider.PromptCacheToolNames(req.Tools),
+		)
+	}
+
 	assetPolicy := session.NormalizeAssetPolicy(cfg.SessionAssetPolicy)
 	requestBudget := provider.NormalizeRequestAssetBudget(cfg.RequestAssetBudget, assetPolicy.MaxSessionAssetBytes)
 	var usedSessionAssetBytes int64

@@ -269,6 +269,7 @@ chat_endpoint_path: /chat/completions
 discovery_endpoint_path: /models
 generate_max_retries: 5
 generate_idle_timeout_sec: 300
+prompt_cache: auto
 ```
 
 新增的生成链路控制字段含义如下：
@@ -276,6 +277,23 @@ generate_idle_timeout_sec: 300
 - `generate_max_retries`：额外重试次数，不含首次尝试；未填写时默认使用 `5`，显式填写 `0` 表示关闭生成重试，且必须 `<= 20`。
 - `generate_start_timeout_sec`：写在 `config.yaml` 顶层，从发请求到收到首个有效流 payload 的最长等待窗口；`<= 0` 时回退默认值 `90`。
 - `generate_idle_timeout_sec`：首包后连续没有任何新 payload 的最长空闲窗口；`<= 0` 时回退默认值 `300`。
+- `prompt_cache`：是否发送 prompt 缓存标记，只接受 `auto` 与 `off`。留空时按 driver 取默认值：`anthropic` 默认 `auto`，其余 driver 默认 `off`。关闭后请求内容不变，但不再携带缓存断点与缓存路由键，用于规避缓存写入溢价或排障。
+
+### prompt 缓存
+
+NeoCode 把系统提示固定切分为"稳定前缀"与"易变尾部"两段，稳定前缀由角色定义与工作区规则文件（如 `AGENTS.md`）组成。各 adapter 按厂商能力映射：
+
+| Driver | 映射方式 |
+|--------|----------|
+| `anthropic` | 系统提示拆为两个 text block，在稳定块末尾与最后一个工具上放置 `cache_control: ephemeral`；仅当稳定前缀估算达到 1024 token 时才打标 |
+| `openaicompat` | `chat completions` 与 `responses` 两种模式均发送 `prompt_cache_key`（由模型、稳定前缀与工具名集合哈希生成），提升同前缀请求的路由命中率 |
+| `gemini` | 依赖隐式缓存，不发送额外参数 |
+| `deepseek` / `qwen` / `glm` / `mimo` / `minimax` | 不发送路由键：各自有独立的上下文缓存机制，且对未知字段校验更严格 |
+
+默认值按 driver 区分。`cache_control` 是 Anthropic 的官方协议字段，端点不会拒绝，因此默认开启。`openaicompat` 服务任意兼容网关，`prompt_cache_key` 属于可选扩展参数，在未确认端点支持前发送可能让原本可用的网关返回 400，因此默认关闭；需要在该 provider 的 `provider.yaml` 中显式写 `prompt_cache: auto` 声明该端点支持。该设置支持写入 provider 文件并随配置读写往返保留。
+
+memo 索引、todo、git 状态等随会话变化的内容位于易变尾部，不会进入缓存前缀。usage 统计中的 `cache_read_input_tokens` 与 `prompt_tokens_details.cached_tokens` 会归一化到统一字段，缓存命中部分计入总输入预算，不会导致 compact 判定低估。
+
 
 启动时会自动把缺失的 `generate_start_timeout_sec` 规范化写回 `config.yaml`，避免磁盘配置与运行时默认值不一致。
 

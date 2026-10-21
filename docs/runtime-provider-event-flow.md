@@ -120,6 +120,10 @@ provider 返回后，runtime 会执行显式的账本调和。
 - `output_tokens`
 - `output_source`
 - `has_unknown_usage`
+- `cache_read_input_tokens`（可选，prompt 缓存命中读取的输入 token）
+- `cache_write_input_tokens`（可选，写入 prompt 缓存的输入 token，仅 Anthropic 显式缓存有该口径）
+
+`input_tokens` 按“含缓存的总输入”统计（等于未命中输入 + 缓存命中 + 缓存写入），因此开启 prompt 缓存后预算累计与 compact 判定不会低估。
 
 规则：
 

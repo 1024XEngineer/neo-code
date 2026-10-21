@@ -11,6 +11,9 @@ type Request struct {
 	ToolChoice      string           `json:"tool_choice,omitempty"`
 	Stream          bool             `json:"stream"`
 	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
+	// PromptCacheKey 是缓存路由键，作用是让相同前缀的请求尽量落到同一后端，
+	// 提升 OpenAI 自动前缀缓存的命中率；为空时不发送该字段。
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
 }
 
 // Message 表示 OpenAI 协议中的消息格式。

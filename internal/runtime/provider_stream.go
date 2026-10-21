@@ -17,7 +17,11 @@ type streamGenerateResult struct {
 	outputTokens   int
 	inputObserved  bool
 	outputObserved bool
-	err            error
+	// cacheReadTokens 与 cacheWriteTokens 记录 prompt 缓存命中与写入的输入 token 数，
+	// 仅用于可观测性，不计入 inputTokens（inputTokens 已是含缓存的输入总量）。
+	cacheReadTokens  int
+	cacheWriteTokens int
+	err              error
 }
 
 // generateStreamingMessage 负责执行一次基于流式事件的生成调用，并收敛最终 assistant 消息与 usage。
@@ -41,10 +45,14 @@ func generateStreamingMessage(
 		hooksCopy := hooks
 		hooksCopy.OnMessageDone = func(payload providertypes.MessageDonePayload) {
 			if payload.Usage != nil {
-				outcome.inputTokens = payload.Usage.InputTokens
+				// 必须使用 TotalInputTokens：厂商原始 input_tokens 不含缓存命中与写入部分，
+				// 直接取值会让预算累计与 compact 判定在开启 prompt 缓存后系统性低估。
+				outcome.inputTokens = payload.Usage.TotalInputTokens()
 				outcome.outputTokens = payload.Usage.OutputTokens
 				outcome.inputObserved = payload.Usage.InputObserved
 				outcome.outputObserved = payload.Usage.OutputObserved
+				outcome.cacheReadTokens = payload.Usage.CacheReadInputTokens
+				outcome.cacheWriteTokens = payload.Usage.CacheWriteInputTokens
 			}
 			if userOnMessageDone != nil {
 				userOnMessageDone(payload)

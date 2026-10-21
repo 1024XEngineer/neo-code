@@ -100,9 +100,12 @@ type streamChunk struct {
 }
 
 type streamUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	PromptTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
 }
 
 // ConsumeStream 消费 chat/completions SSE 流并发出统一流式事件，兼容弱 SSE 事件分隔格式。
@@ -258,24 +261,51 @@ func extractLegacyStreamUsage(usage *providertypes.Usage, raw *streamUsage) {
 	if raw == nil {
 		return
 	}
+	uncached, cached := normalizeCachedPromptTokens(raw.PromptTokens, raw.PromptTokensDetails.CachedTokens)
 	*usage = providertypes.Usage{
-		InputTokens:    raw.PromptTokens,
-		OutputTokens:   raw.CompletionTokens,
-		TotalTokens:    raw.TotalTokens,
-		InputObserved:  true,
-		OutputObserved: true,
+		InputTokens:          uncached,
+		OutputTokens:         raw.CompletionTokens,
+		TotalTokens:          raw.TotalTokens,
+		InputObserved:        true,
+		OutputObserved:       true,
+		CacheReadInputTokens: cached,
 	}
 }
 
 // extractStreamUsage 将 OpenAI usage 覆盖到统一 token 统计。
+// OpenAI 的 prompt_tokens 已包含缓存命中部分，而 Anthropic 的 input_tokens 不含，
+// 因此这里拆出未命中部分，把两家的 InputTokens 统一为"未命中缓存的输入"语义。
 func extractStreamUsage(usage *providertypes.Usage, raw openai.CompletionUsage) {
+	uncached, cached := normalizeCachedPromptTokens(int(raw.PromptTokens), int(raw.PromptTokensDetails.CachedTokens))
 	*usage = providertypes.Usage{
-		InputTokens:    int(raw.PromptTokens),
-		OutputTokens:   int(raw.CompletionTokens),
-		TotalTokens:    int(raw.TotalTokens),
-		InputObserved:  true,
-		OutputObserved: true,
+		InputTokens:          uncached,
+		OutputTokens:         int(raw.CompletionTokens),
+		TotalTokens:          int(raw.TotalTokens),
+		InputObserved:        true,
+		OutputObserved:       true,
+		CacheReadInputTokens: cached,
 	}
+}
+
+// normalizeCachedPromptTokens 把厂商上报的缓存命中数收敛到合法区间，并返回拆出后的未命中输入。
+// cached 必须落在 [0, prompt]：若只对减法结果做下限裁剪而保留超额 cached，
+// TotalInputTokens() 会高于厂商上报的总量（prompt=100、cached=150 时会得到 150），
+// 而该值会被账本当作已观测输入持久化。
+func normalizeCachedPromptTokens(promptTokens int, cachedTokens int) (uncached int, cached int) {
+	prompt := clampNonNegative(promptTokens)
+	cached = clampNonNegative(cachedTokens)
+	if cached > prompt {
+		cached = prompt
+	}
+	return prompt - cached, cached
+}
+
+// clampNonNegative 把可能因厂商数据异常而出现的负值收敛为 0。
+func clampNonNegative(value int) int {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 // doneUsagePtr 在 message_done 事件中按 usage 观测状态返回 payload，未观测时返回 nil。

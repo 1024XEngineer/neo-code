@@ -909,7 +909,7 @@ func TestDefaultBuilderBuildTodoChangeDoesNotChangeStablePrompt(t *testing.T) {
 	}
 }
 
-func TestDefaultBuilderBuildMemoIsStable(t *testing.T) {
+func TestDefaultBuilderBuildMemoStaysInDynamicSegment(t *testing.T) {
 	t.Parallel()
 
 	builder := NewConfiguredBuilder(stubPromptSectionSource{
@@ -928,11 +928,13 @@ func TestDefaultBuilderBuildMemoIsStable(t *testing.T) {
 		t.Fatalf("Build() error = %v", err)
 	}
 
-	if !strings.Contains(result.StableSystemPrompt, "## memo") {
-		t.Fatalf("expected memo in StableSystemPrompt, got %q", result.StableSystemPrompt)
+	// memo 索引随会话写入变化，必须留在动态段：一旦进入稳定段，
+	// 每次 memo 变更都会让 prompt 缓存前缀整体失效。
+	if strings.Contains(result.StableSystemPrompt, "## memo") {
+		t.Fatalf("did not expect memo in StableSystemPrompt, got %q", result.StableSystemPrompt)
 	}
-	if strings.Contains(result.DynamicSystemPrompt, "## memo") {
-		t.Fatalf("did not expect memo in DynamicSystemPrompt, got %q", result.DynamicSystemPrompt)
+	if !strings.Contains(result.DynamicSystemPrompt, "## memo") {
+		t.Fatalf("expected memo in DynamicSystemPrompt, got %q", result.DynamicSystemPrompt)
 	}
 }
 

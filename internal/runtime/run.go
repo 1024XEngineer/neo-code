@@ -615,6 +615,9 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 
 	repeatLimit := resolveRepeatCycleStreakLimit(cfg.Runtime)
 	var systemPrompt string
+	// systemStablePrefix 记录 systemPrompt 中可用于 prompt 缓存打标的稳定前缀。
+	// 仅在能够证明它为最终文本的真实前缀时赋值，其余情况保持为空以触发 adapter 降级。
+	var systemStablePrefix string
 	if builtContext.DynamicSystemPrompt != "" {
 		// New style: reminders append to dynamicPrompt, then join with stable
 		prompt := withProgressReminder(builtContext.DynamicSystemPrompt, score)
@@ -625,6 +628,12 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 			prompt = mergeEphemeralHookNotificationIntoSystemPrompt(prompt, notificationHint)
 		}
 		systemPrompt = joinRuntimeSystemPromptParts(builtContext.StableSystemPrompt, prompt)
+		// joinRuntimeSystemPromptParts 会裁剪两端空白，故取裁剪后的稳定段作为前缀候选，
+		// 并在确认构成真实前缀后才采用，避免裁剪差异导致缓存标记指向错误的字节边界。
+		stableCandidate := strings.TrimSpace(builtContext.StableSystemPrompt)
+		if stableCandidate != "" && strings.HasPrefix(systemPrompt, stableCandidate) {
+			systemStablePrefix = stableCandidate
+		}
 	} else {
 		// Legacy fallback: reminders append to SystemPrompt directly
 		systemPrompt = withProgressReminder(builtContext.SystemPrompt, score)
@@ -660,6 +669,7 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	request := providertypes.GenerateRequest{
 		Model:              model,
 		SystemPrompt:       systemPrompt,
+		SystemStablePrefix: systemStablePrefix,
 		Messages:           requestMessages,
 		Tools:              toolSpecs,
 		ThinkingConfig:     thinkingCfg,
@@ -773,6 +783,8 @@ func (s *Service) callProvider(
 			streamOutcome.outputTokens,
 			streamOutcome.inputObserved,
 			streamOutcome.outputObserved,
+			streamOutcome.cacheReadTokens,
+			streamOutcome.cacheWriteTokens,
 		),
 	}, nil
 }
@@ -831,13 +843,15 @@ func (s *Service) emitTokenUsage(ctx context.Context, state *runState, result le
 		return
 	}
 	s.emitRunScoped(ctx, EventTokenUsage, state, TokenUsagePayload{
-		InputTokens:         result.inputTokens,
-		OutputTokens:        result.outputTokens,
-		InputSource:         result.inputSource,
-		OutputSource:        result.outputSource,
-		HasUnknownUsage:     result.hasUnknownUsage,
-		SessionInputTokens:  state.session.TokenInputTotal,
-		SessionOutputTokens: state.session.TokenOutputTotal,
+		InputTokens:           result.inputTokens,
+		OutputTokens:          result.outputTokens,
+		InputSource:           result.inputSource,
+		OutputSource:          result.outputSource,
+		HasUnknownUsage:       result.hasUnknownUsage,
+		SessionInputTokens:    state.session.TokenInputTotal,
+		SessionOutputTokens:   state.session.TokenOutputTotal,
+		CacheReadInputTokens:  result.cacheReadTokens,
+		CacheWriteInputTokens: result.cacheWriteTokens,
 	})
 }
 
@@ -1054,8 +1068,10 @@ func (s *Service) reconcileLedger(
 		return ledgerReconcileResult{}, fmt.Errorf("runtime: turn budget id mismatch between decision and usage observation")
 	}
 	reconciled := ledgerReconcileResult{
-		inputSource:  usageSourceUnknown,
-		outputSource: usageSourceUnknown,
+		inputSource:      usageSourceUnknown,
+		outputSource:     usageSourceUnknown,
+		cacheReadTokens:  observation.CacheReadInputTokens,
+		cacheWriteTokens: observation.CacheWriteInputTokens,
 	}
 	if observation.InputObserved {
 		reconciled.inputTokens = observation.InputTokens

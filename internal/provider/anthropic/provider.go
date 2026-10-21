@@ -125,6 +125,12 @@ func (p *Provider) generateOnce(
 				usage.InputTokens = int(variant.Message.Usage.InputTokens)
 				usage.InputObserved = true
 			}
+			if variant.Message.Usage.JSON.CacheReadInputTokens.Valid() {
+				usage.CacheReadInputTokens = int(variant.Message.Usage.CacheReadInputTokens)
+			}
+			if variant.Message.Usage.JSON.CacheCreationInputTokens.Valid() {
+				usage.CacheWriteInputTokens = int(variant.Message.Usage.CacheCreationInputTokens)
+			}
 			if variant.Message.Usage.JSON.OutputTokens.Valid() {
 				usage.OutputTokens = int(variant.Message.Usage.OutputTokens)
 				usage.OutputObserved = true
@@ -200,6 +206,12 @@ func (p *Provider) generateOnce(
 				usage.InputTokens = int(variant.Usage.InputTokens)
 				usage.InputObserved = true
 			}
+			if variant.Usage.JSON.CacheReadInputTokens.Valid() {
+				usage.CacheReadInputTokens = int(variant.Usage.CacheReadInputTokens)
+			}
+			if variant.Usage.JSON.CacheCreationInputTokens.Valid() {
+				usage.CacheWriteInputTokens = int(variant.Usage.CacheCreationInputTokens)
+			}
 		}
 	}
 	if streamErr := streamReader.Err(); streamErr != nil {
@@ -223,7 +235,8 @@ func (p *Provider) generateOnce(
 		}
 	}
 	if usage.TotalTokens <= 0 && (usage.InputObserved || usage.OutputObserved) {
-		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+		// 缓存命中与写入部分不计入 InputTokens，总量必须按 TotalInputTokens 汇总。
+		usage.TotalTokens = usage.TotalInputTokens() + usage.OutputTokens
 	}
 	if !usage.InputObserved && !usage.OutputObserved {
 		return provider.EmitMessageDone(ctx, events, finishReason, nil)

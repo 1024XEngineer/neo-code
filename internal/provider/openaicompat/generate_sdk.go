@@ -102,6 +102,9 @@ func convertToChatCompletionParams(req chatcompletions.Request) openai.ChatCompl
 			IncludeUsage: openai.Bool(true),
 		},
 	}
+	if key := strings.TrimSpace(req.PromptCacheKey); key != "" {
+		params.PromptCacheKey = openai.String(key)
+	}
 
 	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages))
 	for _, msg := range req.Messages {
