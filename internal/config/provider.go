@@ -325,10 +325,11 @@ func (p ResolvedProviderConfig) ToRuntimeConfig() (provider.RuntimeConfig, error
 		ChatAPIMode:           chatAPIMode,
 		ChatEndpointPath:      chatEndpointPath,
 		DiscoveryEndpointPath: discoveryEndpointPath,
-		PromptCacheMode:       provider.NormalizePromptCacheMode(p.PromptCache),
-		GenerateMaxRetries:    p.resolveGenerateMaxRetries(),
-		GenerateStartTimeout:  provider.NormalizeGenerateStartTimeout(time.Duration(p.GenerateStartTimeoutSec) * time.Second),
-		GenerateIdleTimeout:   provider.NormalizeGenerateIdleTimeout(time.Duration(p.GenerateIdleTimeoutSec) * time.Second),
+		// 保留显式取值（含空值），由 provider 层按 driver 决定默认模式。
+		PromptCacheMode:      strings.ToLower(strings.TrimSpace(p.PromptCache)),
+		GenerateMaxRetries:   p.resolveGenerateMaxRetries(),
+		GenerateStartTimeout: provider.NormalizeGenerateStartTimeout(time.Duration(p.GenerateStartTimeoutSec) * time.Second),
+		GenerateIdleTimeout:  provider.NormalizeGenerateIdleTimeout(time.Duration(p.GenerateIdleTimeoutSec) * time.Second),
 	}, nil
 }
 

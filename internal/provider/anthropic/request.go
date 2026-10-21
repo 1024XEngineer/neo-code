@@ -35,7 +35,8 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 		return anthropic.MessageNewParams{}, errors.New(errorPrefix + "model is empty")
 	}
 
-	cacheEnabled := provider.PromptCacheEnabled(cfg.PromptCacheMode)
+	// adapter 自报 driver：anthropic 的 cache_control 是官方字段，默认开启。
+	cacheEnabled := provider.PromptCacheEnabled(cfg.PromptCacheMode, provider.DriverAnthropic)
 	breakpoints := 0
 
 	params := anthropic.MessageNewParams{

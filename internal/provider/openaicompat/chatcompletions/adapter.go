@@ -261,9 +261,9 @@ func extractLegacyStreamUsage(usage *providertypes.Usage, raw *streamUsage) {
 	if raw == nil {
 		return
 	}
-	cached := raw.PromptTokensDetails.CachedTokens
+	uncached, cached := normalizeCachedPromptTokens(raw.PromptTokens, raw.PromptTokensDetails.CachedTokens)
 	*usage = providertypes.Usage{
-		InputTokens:          clampNonNegative(raw.PromptTokens - cached),
+		InputTokens:          uncached,
 		OutputTokens:         raw.CompletionTokens,
 		TotalTokens:          raw.TotalTokens,
 		InputObserved:        true,
@@ -274,17 +274,30 @@ func extractLegacyStreamUsage(usage *providertypes.Usage, raw *streamUsage) {
 
 // extractStreamUsage 将 OpenAI usage 覆盖到统一 token 统计。
 // OpenAI 的 prompt_tokens 已包含缓存命中部分，而 Anthropic 的 input_tokens 不含，
-// 因此这里减去缓存命中数，把两家的 InputTokens 统一为"未命中缓存的输入"语义。
+// 因此这里拆出未命中部分，把两家的 InputTokens 统一为"未命中缓存的输入"语义。
 func extractStreamUsage(usage *providertypes.Usage, raw openai.CompletionUsage) {
-	cached := int(raw.PromptTokensDetails.CachedTokens)
+	uncached, cached := normalizeCachedPromptTokens(int(raw.PromptTokens), int(raw.PromptTokensDetails.CachedTokens))
 	*usage = providertypes.Usage{
-		InputTokens:          clampNonNegative(int(raw.PromptTokens) - cached),
+		InputTokens:          uncached,
 		OutputTokens:         int(raw.CompletionTokens),
 		TotalTokens:          int(raw.TotalTokens),
 		InputObserved:        true,
 		OutputObserved:       true,
 		CacheReadInputTokens: cached,
 	}
+}
+
+// normalizeCachedPromptTokens 把厂商上报的缓存命中数收敛到合法区间，并返回拆出后的未命中输入。
+// cached 必须落在 [0, prompt]：若只对减法结果做下限裁剪而保留超额 cached，
+// TotalInputTokens() 会高于厂商上报的总量（prompt=100、cached=150 时会得到 150），
+// 而该值会被账本当作已观测输入持久化。
+func normalizeCachedPromptTokens(promptTokens int, cachedTokens int) (uncached int, cached int) {
+	prompt := clampNonNegative(promptTokens)
+	cached = clampNonNegative(cachedTokens)
+	if cached > prompt {
+		cached = prompt
+	}
+	return prompt - cached, cached
 }
 
 // clampNonNegative 把可能因厂商数据异常而出现的负值收敛为 0。
