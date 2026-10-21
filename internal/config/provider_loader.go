@@ -21,17 +21,19 @@ const (
 )
 
 type customProviderFile struct {
-	Name                   string                    `yaml:"name"`
-	Driver                 string                    `yaml:"driver"`
-	APIKeyEnv              string                    `yaml:"api_key_env"`
-	GenerateMaxRetries     *int                      `yaml:"generate_max_retries,omitempty"`
-	GenerateIdleTimeoutSec int                       `yaml:"generate_idle_timeout_sec,omitempty"`
-	ModelSource            string                    `yaml:"model_source,omitempty"`
-	ChatAPIMode            string                    `yaml:"chat_api_mode,omitempty"`
-	BaseURL                string                    `yaml:"base_url,omitempty"`
-	ChatEndpointPath       string                    `yaml:"chat_endpoint_path,omitempty"`
-	DiscoveryEndpointPath  string                    `yaml:"discovery_endpoint_path,omitempty"`
-	Models                 []customProviderModelFile `yaml:"models,omitempty"`
+	Name                   string `yaml:"name"`
+	Driver                 string `yaml:"driver"`
+	APIKeyEnv              string `yaml:"api_key_env"`
+	GenerateMaxRetries     *int   `yaml:"generate_max_retries,omitempty"`
+	GenerateIdleTimeoutSec int    `yaml:"generate_idle_timeout_sec,omitempty"`
+	ModelSource            string `yaml:"model_source,omitempty"`
+	ChatAPIMode            string `yaml:"chat_api_mode,omitempty"`
+	BaseURL                string `yaml:"base_url,omitempty"`
+	ChatEndpointPath       string `yaml:"chat_endpoint_path,omitempty"`
+	DiscoveryEndpointPath  string `yaml:"discovery_endpoint_path,omitempty"`
+	// PromptCache 控制是否发送 prompt 缓存标记，取值 auto 或 off。
+	PromptCache string                    `yaml:"prompt_cache,omitempty"`
+	Models      []customProviderModelFile `yaml:"models,omitempty"`
 }
 
 type customProviderModelFile struct {
@@ -120,6 +122,7 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 		ChatAPIMode:            strings.TrimSpace(file.ChatAPIMode),
 		ChatEndpointPath:       strings.TrimSpace(file.ChatEndpointPath),
 		DiscoveryEndpointPath:  strings.TrimSpace(file.DiscoveryEndpointPath),
+		PromptCache:            strings.TrimSpace(file.PromptCache),
 		Models:                 models,
 	})
 	if err != nil {
@@ -138,6 +141,7 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 		ChatAPIMode:            normalizedInput.ChatAPIMode,
 		ChatEndpointPath:       normalizedInput.ChatEndpointPath,
 		DiscoveryEndpointPath:  normalizedInput.DiscoveryEndpointPath,
+		PromptCache:            normalizedInput.PromptCache,
 		Models:                 normalizedInput.Models,
 		Source:                 ProviderSourceCustom,
 	}
@@ -194,6 +198,7 @@ type SaveCustomProviderInput struct {
 	GenerateIdleTimeoutSec int
 	DiscoveryEndpointPath  string
 	ModelSource            string
+	PromptCache            string
 	Models                 []providertypes.ModelDescriptor
 }
 
@@ -217,6 +222,7 @@ func SaveCustomProviderWithModels(baseDir string, input SaveCustomProviderInput)
 		GenerateIdleTimeoutSec: normalizedInput.GenerateIdleTimeoutSec,
 		ModelSource:            normalizedInput.ModelSource,
 		ChatAPIMode:            normalizedInput.ChatAPIMode,
+		PromptCache:            normalizedInput.PromptCache,
 	}
 
 	cfg.BaseURL = normalizedInput.BaseURL
