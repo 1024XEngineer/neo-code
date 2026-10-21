@@ -28,9 +28,11 @@ type RuntimeConfig struct {
 	ChatAPIMode           string
 	ChatEndpointPath      string
 	DiscoveryEndpointPath string
-	GenerateMaxRetries    int
-	GenerateStartTimeout  time.Duration
-	GenerateIdleTimeout   time.Duration
+	// PromptCacheMode 控制是否发送 prompt 缓存标记，取值参见 NormalizePromptCacheMode。
+	PromptCacheMode      string
+	GenerateMaxRetries   int
+	GenerateStartTimeout time.Duration
+	GenerateIdleTimeout  time.Duration
 }
 
 // ResolveAPIKeyValue 在 provider 即将发起请求前解析当前配置引用的 API Key。

@@ -22,20 +22,22 @@ const (
 )
 
 type ProviderConfig struct {
-	Name                   string                          `yaml:"name"`
-	Driver                 string                          `yaml:"driver"`
-	BaseURL                string                          `yaml:"base_url"`
-	Model                  string                          `yaml:"model"`
-	APIKeyEnv              string                          `yaml:"api_key_env"`
-	GenerateMaxRetries     int                             `yaml:"generate_max_retries,omitempty"`
-	GenerateMaxRetriesSet  bool                            `yaml:"-"`
-	GenerateIdleTimeoutSec int                             `yaml:"generate_idle_timeout_sec,omitempty"`
-	ModelSource            string                          `yaml:"-"`
-	ChatAPIMode            string                          `yaml:"-"`
-	ChatEndpointPath       string                          `yaml:"-"`
-	DiscoveryEndpointPath  string                          `yaml:"-"`
-	Models                 []providertypes.ModelDescriptor `yaml:"-"`
-	Source                 ProviderSource                  `yaml:"-"`
+	Name                   string `yaml:"name"`
+	Driver                 string `yaml:"driver"`
+	BaseURL                string `yaml:"base_url"`
+	Model                  string `yaml:"model"`
+	APIKeyEnv              string `yaml:"api_key_env"`
+	GenerateMaxRetries     int    `yaml:"generate_max_retries,omitempty"`
+	GenerateMaxRetriesSet  bool   `yaml:"-"`
+	GenerateIdleTimeoutSec int    `yaml:"generate_idle_timeout_sec,omitempty"`
+	// PromptCache 控制是否发送 prompt 缓存标记，取值为 auto 或 off，留空视为 auto。
+	PromptCache           string                          `yaml:"prompt_cache,omitempty"`
+	ModelSource           string                          `yaml:"-"`
+	ChatAPIMode           string                          `yaml:"-"`
+	ChatEndpointPath      string                          `yaml:"-"`
+	DiscoveryEndpointPath string                          `yaml:"-"`
+	Models                []providertypes.ModelDescriptor `yaml:"-"`
+	Source                ProviderSource                  `yaml:"-"`
 }
 
 type ResolvedProviderConfig struct {
@@ -94,6 +96,9 @@ func (p ProviderConfig) Validate() error {
 	if err := validateOptionalGenerateMaxRetries(p.GenerateMaxRetries); err != nil {
 		return fmt.Errorf("provider %q: %w", p.Name, err)
 	}
+	if err := validateOptionalPromptCache(p.PromptCache); err != nil {
+		return fmt.Errorf("provider %q: %w", p.Name, err)
+	}
 	if err := validateOptionalGenerateDurationSeconds("generate_idle_timeout_sec", p.GenerateIdleTimeoutSec); err != nil {
 		return fmt.Errorf("provider %q: %w", p.Name, err)
 	}
@@ -132,6 +137,17 @@ func validateOptionalNonNegativeGenerateControl(field string, value int) error {
 		return fmt.Errorf("%s must be greater than or equal to 0", field)
 	}
 	return nil
+}
+
+// validateOptionalPromptCache 校验 prompt 缓存开关，只接受 auto 与 off，空值表示使用默认值。
+func validateOptionalPromptCache(value string) error {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "", provider.PromptCacheModeAuto, provider.PromptCacheModeOff:
+		return nil
+	default:
+		return fmt.Errorf("prompt_cache must be %q or %q", provider.PromptCacheModeAuto, provider.PromptCacheModeOff)
+	}
 }
 
 // validateOptionalGenerateMaxRetries 校验额外重试次数，防止超大值导致生成阶段重试循环过长。
@@ -309,6 +325,7 @@ func (p ResolvedProviderConfig) ToRuntimeConfig() (provider.RuntimeConfig, error
 		ChatAPIMode:           chatAPIMode,
 		ChatEndpointPath:      chatEndpointPath,
 		DiscoveryEndpointPath: discoveryEndpointPath,
+		PromptCacheMode:       provider.NormalizePromptCacheMode(p.PromptCache),
 		GenerateMaxRetries:    p.resolveGenerateMaxRetries(),
 		GenerateStartTimeout:  provider.NormalizeGenerateStartTimeout(time.Duration(p.GenerateStartTimeoutSec) * time.Second),
 		GenerateIdleTimeout:   provider.NormalizeGenerateIdleTimeout(time.Duration(p.GenerateIdleTimeoutSec) * time.Second),

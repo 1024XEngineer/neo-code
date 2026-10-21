@@ -117,6 +117,9 @@ type LedgerReconciledPayload struct {
 	OutputTokens    int    `json:"output_tokens"`
 	OutputSource    string `json:"output_source"`
 	HasUnknownUsage bool   `json:"has_unknown_usage"`
+	// CacheReadInputTokens 与 CacheWriteInputTokens 暴露 prompt 缓存命中与写入明细。
+	CacheReadInputTokens  int `json:"cache_read_input_tokens,omitempty"`
+	CacheWriteInputTokens int `json:"cache_write_input_tokens,omitempty"`
 }
 
 // newBudgetCheckedPayload 将预算决策对象展开为对外事件 payload，保持可观测字段稳定。
@@ -152,13 +155,15 @@ func newLedgerReconciledPayload(
 	result ledgerReconcileResult,
 ) LedgerReconciledPayload {
 	return LedgerReconciledPayload{
-		AttemptSeq:      observation.ID.AttemptSeq,
-		RequestHash:     observation.ID.RequestHash,
-		InputTokens:     result.inputTokens,
-		InputSource:     result.inputSource,
-		OutputTokens:    result.outputTokens,
-		OutputSource:    result.outputSource,
-		HasUnknownUsage: result.hasUnknownUsage,
+		AttemptSeq:            observation.ID.AttemptSeq,
+		RequestHash:           observation.ID.RequestHash,
+		InputTokens:           result.inputTokens,
+		InputSource:           result.inputSource,
+		OutputTokens:          result.outputTokens,
+		OutputSource:          result.outputSource,
+		HasUnknownUsage:       result.hasUnknownUsage,
+		CacheReadInputTokens:  result.cacheReadTokens,
+		CacheWriteInputTokens: result.cacheWriteTokens,
 	}
 }
 
@@ -460,6 +465,10 @@ type TokenUsagePayload struct {
 	HasUnknownUsage     bool   `json:"has_unknown_usage,omitempty"`
 	SessionInputTokens  int    `json:"session_input_tokens"`
 	SessionOutputTokens int    `json:"session_output_tokens"`
+	// CacheReadInputTokens 与 CacheWriteInputTokens 暴露 prompt 缓存命中与写入明细，
+	// 供客户端计算命中率；为空表示本轮没有发生缓存读写。
+	CacheReadInputTokens  int `json:"cache_read_input_tokens,omitempty"`
+	CacheWriteInputTokens int `json:"cache_write_input_tokens,omitempty"`
 }
 
 // CheckpointCreatedPayload 描述 checkpoint 创建成功事件。

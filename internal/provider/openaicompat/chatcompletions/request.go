@@ -2,7 +2,9 @@ package chatcompletions
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,11 +17,37 @@ import (
 	"neo-code/internal/session"
 )
 
+// errorPrefix 是 chat/completions 适配层统一的错误前缀。
 const errorPrefix = "openaicompat provider: "
 
+// maxSessionAssetsTotalBytes 是单次请求允许携带的会话附件总字节上限。
 const maxSessionAssetsTotalBytes = provider.MaxSessionAssetsTotalBytes
 
+// htmlErrorSnippetMaxRunes 是错误响应中截取 HTML 片段的字符上限。
 const htmlErrorSnippetMaxRunes = 320
+
+// promptCacheKeyHexLength 是缓存路由键的十六进制长度，远低于各厂商 64 字符的上限。
+const promptCacheKeyHexLength = 32
+
+// computePromptCacheKey 基于模型、稳定系统前缀与工具名集合生成缓存路由键。
+// 三者任一变化都应产生新键：不同前缀共享同一键会把请求错误地路由到一起。
+// 无稳定前缀时返回空串，调用方据此不发送该字段。
+func computePromptCacheKey(model string, req providertypes.GenerateRequest) string {
+	prefix := req.ResolvedStablePrefix()
+	if prefix == "" {
+		return ""
+	}
+
+	digest := sha256.New()
+	digest.Write([]byte(model))
+	digest.Write([]byte{0})
+	digest.Write([]byte(prefix))
+	for _, spec := range req.Tools {
+		digest.Write([]byte{0})
+		digest.Write([]byte(strings.TrimSpace(spec.Name)))
+	}
+	return hex.EncodeToString(digest.Sum(nil))[:promptCacheKeyHexLength]
+}
 
 // BuildRequest 将 provider.GenerateRequest 转换为 Chat Completions 请求结构。
 // 模型优先取 req.Model，其次使用配置中的默认模型。
@@ -45,6 +73,13 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 			Role:    providertypes.RoleSystem,
 			Content: req.SystemPrompt,
 		})
+	}
+
+	// OpenAI 的前缀缓存是自动的，但需要稳定前缀 + 稳定的路由键才能获得高命中率。
+	// 仅在存在可证明的稳定前缀、且该 driver 接受该字段时发送，
+	// 避免给自研 HTTP 厂商（DeepSeek / Qwen / GLM 等）注入无意义的未知字段。
+	if provider.PromptCacheEnabled(cfg.PromptCacheMode) && provider.SupportsPromptCacheKey(cfg.Driver) {
+		payload.PromptCacheKey = computePromptCacheKey(model, req)
 	}
 
 	var usedSessionAssetBytes int64

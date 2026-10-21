@@ -35,7 +35,16 @@ func EstimateTextTokens(text string) int {
 	if text == "" {
 		return 0
 	}
-	return int(math.Ceil(float64(len([]byte(text))) / 4.0 * localEstimateSlack))
+	return EstimateByteCountTokens(len([]byte(text)))
+}
+
+// EstimateByteCountTokens 按字节数做保守放大的本地 token 估算。
+// 供不必构造完整文本、只需按规模做阈值判断的场景复用。
+func EstimateByteCountTokens(byteCount int) int {
+	if byteCount <= 0 {
+		return 0
+	}
+	return int(math.Ceil(float64(byteCount) / 4.0 * localEstimateSlack))
 }
 
 // RequestContainsImagePart 判断请求中是否包含图片分片，供 provider 选择多模态投影估算路径。

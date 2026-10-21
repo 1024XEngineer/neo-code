@@ -33,6 +33,9 @@ type TurnBudgetUsageObservation struct {
 	OutputTokens   int
 	InputObserved  bool
 	OutputObserved bool
+	// CacheReadInputTokens 与 CacheWriteInputTokens 是 prompt 缓存的命中与写入明细。
+	CacheReadInputTokens  int
+	CacheWriteInputTokens int
 }
 
 // turnProviderOutput 汇总一次 provider 调用返回的 assistant 消息与预算 usage observation。
@@ -48,6 +51,9 @@ type ledgerReconcileResult struct {
 	outputTokens    int
 	outputSource    string
 	hasUnknownUsage bool
+	// cacheReadTokens 与 cacheWriteTokens 透传观测到的缓存明细，供对账事件展示。
+	cacheReadTokens  int
+	cacheWriteTokens int
 }
 
 // newTurnBudgetSnapshot 构造本次发送尝试的冻结预算快照。
@@ -113,12 +119,16 @@ func newTurnBudgetUsageObservation(
 	outputTokens int,
 	inputObserved bool,
 	outputObserved bool,
+	cacheReadTokens int,
+	cacheWriteTokens int,
 ) TurnBudgetUsageObservation {
 	return TurnBudgetUsageObservation{
-		ID:             id,
-		InputTokens:    inputTokens,
-		OutputTokens:   outputTokens,
-		InputObserved:  inputObserved,
-		OutputObserved: outputObserved,
+		ID:                    id,
+		InputTokens:           inputTokens,
+		OutputTokens:          outputTokens,
+		InputObserved:         inputObserved,
+		OutputObserved:        outputObserved,
+		CacheReadInputTokens:  cacheReadTokens,
+		CacheWriteInputTokens: cacheWriteTokens,
 	}
 }
