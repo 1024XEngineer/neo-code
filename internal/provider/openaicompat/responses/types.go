@@ -8,6 +8,9 @@ type Request struct {
 	Tools        []ToolDefinition `json:"tools,omitempty"`
 	ToolChoice   string           `json:"tool_choice,omitempty"`
 	Stream       bool             `json:"stream"`
+	// PromptCacheKey 是缓存路由键，作用是让相同前缀的请求尽量落到同一后端，
+	// 提升自动前缀缓存的命中率；为空时不发送该字段。
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
 }
 
 // InputItem 表示 Responses API 中输入项（消息、函数调用、函数调用输出）。
